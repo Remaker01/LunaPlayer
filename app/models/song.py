@@ -1,5 +1,5 @@
 """
-Data models for songs, playlists, and playback modes.
+Data models for songs and playback modes.
 
 All model classes are plain data containers (dataclasses) with no business logic.
 """
@@ -38,21 +38,3 @@ class Song:
             value = getattr(self, field_name)
             if value is None:
                 object.__setattr__(self, field_name, "")
-
-
-@dataclass
-class Playlist:
-    """Represents a named playlist."""
-
-    id: Optional[int] = None
-    name: str = ""
-    created_time: str = ""  # ISO-8601 formatted timestamp.
-
-
-@dataclass
-class PlaylistSong:
-    """Many-to-many relationship between playlists and songs."""
-
-    playlist_id: int = 0
-    song_id: int = 0
-    sort_index: int = 0

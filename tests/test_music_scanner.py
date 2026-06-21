@@ -275,7 +275,7 @@ class TestMusicScanner(unittest.TestCase):
         self.assertEqual(len(found2), 0)
 
         # DB should still have 3 songs
-        self.assertEqual(self.db.song_count(), 3)
+        self.assertEqual(len(self.db.get_all_songs()), 3)
 
         scanner2.request_stop()
         scanner2.wait(3000)

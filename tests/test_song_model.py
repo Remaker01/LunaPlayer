@@ -1,4 +1,4 @@
-"""Unit tests for data model classes (Song, Playlist, PlaylistSong, PlayMode).
+"""Unit tests for data model classes (Song, PlayMode).
 
 Uses Python's built-in unittest framework.
 """
@@ -7,11 +7,11 @@ from __future__ import annotations
 
 import unittest
 
-from app.models.song import PlayMode, Playlist, PlaylistSong, Song
+from app.models.song import PlayMode, Song
 
 
 class TestPlayMode(unittest.TestCase):
-    """PlayMode enum should contain the four expected modes."""
+    """PlayMode enum should contain the three expected modes."""
 
     def test_members(self) -> None:
         self.assertEqual(PlayMode.SEQUENTIAL, 0)
@@ -64,36 +64,6 @@ class TestSong(unittest.TestCase):
         r = repr(song)
         self.assertIn("Test", r)
         self.assertIn("Me", r)
-
-
-class TestPlaylist(unittest.TestCase):
-    """Playlist dataclass basics."""
-
-    def test_default_construction(self) -> None:
-        pl = Playlist()
-        self.assertIsNone(pl.id)
-        self.assertEqual(pl.name, "")
-
-    def test_full_construction(self) -> None:
-        pl = Playlist(id=1, name="Favorites", created_time="2026-06-20T12:00:00")
-        self.assertEqual(pl.id, 1)
-        self.assertEqual(pl.name, "Favorites")
-
-
-class TestPlaylistSong(unittest.TestCase):
-    """PlaylistSong dataclass basics."""
-
-    def test_default_construction(self) -> None:
-        ps = PlaylistSong()
-        self.assertEqual(ps.playlist_id, 0)
-        self.assertEqual(ps.song_id, 0)
-        self.assertEqual(ps.sort_index, 0)
-
-    def test_full_construction(self) -> None:
-        ps = PlaylistSong(playlist_id=1, song_id=5, sort_index=2)
-        self.assertEqual(ps.playlist_id, 1)
-        self.assertEqual(ps.song_id, 5)
-        self.assertEqual(ps.sort_index, 2)
 
 
 if __name__ == "__main__":
