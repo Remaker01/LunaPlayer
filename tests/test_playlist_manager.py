@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import unittest
 
-from PySide6.QtCore import QCoreApplication
 
 from app.core.playlist_manager import PlaylistManager
 from app.models.song import PlayMode

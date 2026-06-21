@@ -13,13 +13,10 @@ import time
 import unittest
 import wave
 from pathlib import Path
-from typing import Optional
 
-import mutagen
 from PySide6.QtCore import QCoreApplication
 
 from app.core.music_scanner import MusicScanner, extract_metadata, _compute_hash
-from app.models.database import DatabaseManager
 from app.models.song import Song
 from tests.test_base import create_temp_db, destroy_temp_db, ensure_qapp
 

@@ -20,14 +20,11 @@ import time
 import unittest
 import wave
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Optional
 
-import av
-from PySide6.QtCore import QCoreApplication, QTimer
+from PySide6.QtCore import QCoreApplication
 
 from app.core.audio_engine import (
-    MAX_PENDING_BYTES,
-    TARGET_CHANNELS,
     TARGET_SAMPLE_RATE,
     AudioDecoder,
     AudioEngine,

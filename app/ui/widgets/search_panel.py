@@ -16,8 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from PySide6.QtCore import QObject, Qt, Signal, Slot
-from PySide6.QtGui import QFont
+from PySide6.QtCore import Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -25,11 +24,9 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QListView,
     QListWidget,
     QListWidgetItem,
     QPushButton,
-    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )

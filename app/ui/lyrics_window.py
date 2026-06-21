@@ -18,7 +18,7 @@ from __future__ import annotations
 import logging
 import re
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import List, Tuple
 
 from PySide6.QtCore import Qt, QPoint, Signal, Slot
 from PySide6.QtGui import (
@@ -28,8 +28,6 @@ from PySide6.QtGui import (
     QFontDatabase,
     QMouseEvent,
     QPainter,
-    QPen,
-    QBrush,
 )
 from PySide6.QtWidgets import (
     QApplication,

@@ -7,7 +7,7 @@ All model classes are plain data containers (dataclasses) with no business logic
 from __future__ import annotations
 
 import enum
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 

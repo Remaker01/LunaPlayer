@@ -11,7 +11,7 @@ import sqlite3
 from pathlib import Path
 from typing import List, Optional
 
-from .song import Playlist, PlaylistSong, Song
+from .song import Playlist, Song
 
 # Schema DDL – kept close to the manager for single-source-of-truth.
 _SCHEMA_SQL = """

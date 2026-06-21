@@ -26,7 +26,7 @@ from typing import Optional
 from PySide6.QtCore import QIODevice, QMutex, QMutexLocker, QObject, QThread, QTimer, Signal
 from PySide6.QtMultimedia import QAudioFormat, QAudioSink, QMediaDevices
 
-import av
+import av.container, av.stream
 from av.audio.resampler import AudioResampler
 
 # ---------------------------------------------------------------------------
@@ -265,7 +265,7 @@ class AudioDecoder(QThread):
 
     def run(self) -> None:
         try:
-            container = av.open(self._file_path)
+            container = av.container.open(self._file_path)
 
             # --- locate audio stream ---
             audio_stream = next((s for s in container.streams if s.type == "audio"), None)

@@ -11,7 +11,6 @@ from __future__ import annotations
 import logging
 import sys
 from pathlib import Path
-from typing import Optional
 
 # Ensure the project root is on sys.path so that ``app`` is importable
 # regardless of whether the user runs ``python app/main.py`` or
@@ -21,7 +20,6 @@ if str(_project_root) not in sys.path:
     sys.path.insert(0, str(_project_root))
 
 from PySide6.QtCore import QCoreApplication, Qt
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QApplication
 
 from app.core.audio_engine import AudioEngine

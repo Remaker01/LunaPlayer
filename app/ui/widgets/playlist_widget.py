@@ -17,14 +17,12 @@ from __future__ import annotations
 from typing import List, Optional
 
 from PySide6.QtCore import QMimeData, QModelIndex, Qt, QObject, QAbstractListModel, Signal, Slot
-from PySide6.QtGui import QAction, QDrag, QPainter, QPalette, QStandardItem
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QFrame,
-    QInputDialog,
     QListView,
     QMenu,
-    QMessageBox,
     QVBoxLayout,
     QWidget,
 )
