@@ -20,6 +20,7 @@ from PySide6.QtCore import QObject, Qt, Signal, Slot
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QComboBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -114,6 +115,19 @@ class SearchPanel(QWidget):
         self._search_btn.clicked.connect(self._on_search)
         search_row.addWidget(self._search_btn)
         layout.addLayout(search_row)
+
+        # --- Source selector ---
+        source_row = QHBoxLayout()
+        source_label = QLabel("来源:")
+        source_label.setStyleSheet("font-size: 12px; color: #a6adc8;")
+        source_row.addWidget(source_label)
+
+        self._source_combo = QComboBox()
+        self._source_combo.addItem("网易云音乐", "netease")
+        self._source_combo.addItem("QQ音乐", "qq")
+        self._source_combo.addItem("酷狗音乐", "kugou")
+        source_row.addWidget(self._source_combo, 1)
+        layout.addLayout(source_row)
 
         # --- Status / placeholder ---
         self._status_label = QLabel("输入关键词，按回车搜索")
@@ -210,7 +224,8 @@ class SearchPanel(QWidget):
         self._download_btn.setEnabled(False)
 
         if self._search_provider is not None and hasattr(self._search_provider, "search"):
-            self._search_provider.search(keyword)
+            source = self._source_combo.currentData()
+            self._search_provider.search(keyword, source=source)
         else:
             self._status_label.setText("未配置搜索服务")
 

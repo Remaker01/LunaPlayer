@@ -26,24 +26,20 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QDir, Qt, QTimer, Slot, QUrl
-from PySide6.QtGui import QAction, QFont, QKeySequence, QDesktopServices, QShortcut
+from PySide6.QtCore import QDir, Qt, Slot, QUrl
+from PySide6.QtGui import QAction, QKeySequence, QDesktopServices, QShortcut
 from PySide6.QtWidgets import (
-    QAbstractItemView,
     QApplication,
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
     QMainWindow,
-    QMenu,
-    QMenuBar,
-    QMessageBox,
     QProgressBar,
     QPushButton,
     QScrollArea,
     QSlider,
-    QSizePolicy,
     QSplitter,
     QStatusBar,
     QVBoxLayout,
@@ -58,6 +54,7 @@ from app.ui.lyrics_window import LrcParser, LyricsWindow
 from app.ui.widgets.playlist_widget import PlaylistWidget
 from app.ui.widgets.search_panel import SearchPanel
 from app.ui.widgets.song_info_dialog import SongInfoDialog
+from app.ui.widgets.settings_dialog import SettingsDialog, Settings
 from app.services.music_provider import MusicProvider
 import app.services.config as cfg
 
@@ -152,6 +149,9 @@ class MainWindow(QMainWindow):
         # ---- Connect signals ----
         self._connect_signals()
 
+        # ---- Apply persisted settings ----
+        self._apply_saved_settings()
+
     # ================================================================
     # UI Construction
     # ================================================================
@@ -194,15 +194,16 @@ class MainWindow(QMainWindow):
         export_action.triggered.connect(self._on_export_playlist)
         file_menu.addAction(export_action)
 
-        file_menu.addSeparator()
-
-        dl_dir_action = QAction("设置下载目录(&D)…", self)
-        dl_dir_action.triggered.connect(self._on_set_download_dir)
-        file_menu.addAction(dl_dir_action)
-
         open_dl_action = QAction("打开下载目录(&L)", self)
         open_dl_action.triggered.connect(self._on_open_download_dir)
         file_menu.addAction(open_dl_action)
+
+        file_menu.addSeparator()
+
+        settings_action = QAction("设置(&S)…", self)
+        settings_action.setShortcut(QKeySequence("Ctrl+,"))
+        settings_action.triggered.connect(self._on_open_settings)
+        file_menu.addAction(settings_action)
 
         file_menu.addSeparator()
 
@@ -961,23 +962,38 @@ class MainWindow(QMainWindow):
             + (f"  (剩余 {self._active_downloads} 个)" if self._active_downloads else ""))
 
     @Slot()
-    def _on_set_download_dir(self) -> None:
-        """Open a directory picker to change the download location."""
-        new_dir = QFileDialog.getExistingDirectory(
-            self, "选择下载目录", self._download_dir,
-        )
-        if new_dir:
-            self._download_dir = new_dir
-            cfg.set("download_dir", new_dir)
-            self._status_label.setText(f"下载目录已设为: {new_dir}")
-
-    @Slot()
     def _on_open_download_dir(self) -> None:
         """Open the download directory in the system file manager."""
         path = Path(self._download_dir)
         path.mkdir(parents=True, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
         self._status_label.setText(f"已打开: {path}")
+
+    # ================================================================
+    # Slots – Settings
+    # ================================================================
+
+    @Slot()
+    def _on_open_settings(self) -> None:
+        """Open the settings dialog and apply changes."""
+        current = Settings.load()
+        dialog = SettingsDialog(current, self)
+        if dialog.exec() == QDialog.Accepted:
+            new_settings = dialog.settings()
+            if new_settings is None:
+                return
+            self._download_dir = new_settings.download_dir
+            self._lyrics_window.set_lyrics_font_size(new_settings.lyrics_font_size)
+            self._volume_slider.setValue(new_settings.volume)
+            self._playlist_manager.set_play_mode(new_settings.default_play_mode)
+            self._status_label.setText("设置已保存")
+
+    def _apply_saved_settings(self) -> None:
+        """Load persisted settings and apply them to the UI."""
+        saved = Settings.load()
+        self._lyrics_window.set_lyrics_font_size(saved.lyrics_font_size)
+        self._volume_slider.setValue(saved.volume)
+        self._playlist_manager.set_play_mode(saved.default_play_mode)
 
     # ================================================================
     # Internal helpers
