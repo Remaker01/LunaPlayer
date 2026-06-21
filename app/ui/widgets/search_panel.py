@@ -125,7 +125,7 @@ class SearchPanel(QWidget):
         self._results_list = QListWidget()
         self._results_list.setFrameShape(QFrame.NoFrame)
         self._results_list.setAlternatingRowColors(True)
-        self._results_list.setSelectionMode(QAbstractItemView.SingleSelection)
+        self._results_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._results_list.setSpacing(2)
         self._results_list.setWordWrap(True)
         layout.addWidget(self._results_list, 1)
@@ -134,12 +134,12 @@ class SearchPanel(QWidget):
         btn_layout = QHBoxLayout()
         btn_layout.setSpacing(6)
 
-        self._add_btn = QPushButton("➕ 添加到播放列表")
+        self._add_btn = QPushButton("➕ 添加选中到播放列表")
         self._add_btn.clicked.connect(self._on_add_to_playlist)
         self._add_btn.setEnabled(False)
         btn_layout.addWidget(self._add_btn)
 
-        self._download_btn = QPushButton("⬇ 下载")
+        self._download_btn = QPushButton("⬇ 下载选中")
         self._download_btn.clicked.connect(self._on_download)
         self._download_btn.setEnabled(False)
         btn_layout.addWidget(self._download_btn)
@@ -150,8 +150,8 @@ class SearchPanel(QWidget):
         self._results: list[Song] = []
         self._search_provider: Any = None  # Will be set by MainWindow
 
-        # Enable buttons when a result is selected.
-        self._results_list.currentRowChanged.connect(self._on_selection_changed)
+        # Enable buttons when result(s) are selected.
+        self._results_list.itemSelectionChanged.connect(self._on_selection_changed)
         self._results_list.itemDoubleClicked.connect(self._on_item_double_clicked)
 
     # ------------------------------------------------------------------
@@ -159,7 +159,8 @@ class SearchPanel(QWidget):
     # ------------------------------------------------------------------
 
     def set_search_provider(self, provider: Any) -> None:
-        """Set the search provider instance (must implement ``search`` method)."""
+        """Set the search provider instance (must implement ``search`` method
+        and emit ``results_ready`` / ``search_error`` signals)."""
         self._search_provider = provider
 
     @Slot(list)
@@ -213,9 +214,9 @@ class SearchPanel(QWidget):
         else:
             self._status_label.setText("未配置搜索服务")
 
-    def _on_selection_changed(self, row: int) -> None:
-        """Enable/disable action buttons based on selection."""
-        has_selection = 0 <= row < len(self._results)
+    def _on_selection_changed(self) -> None:
+        """Enable/disable action buttons based on selection count."""
+        has_selection = len(self._results_list.selectedItems()) > 0
         self._add_btn.setEnabled(has_selection)
         self._download_btn.setEnabled(has_selection)
 
@@ -226,13 +227,15 @@ class SearchPanel(QWidget):
             self.add_to_playlist_requested.emit(self._results[row])
 
     def _on_add_to_playlist(self) -> None:
-        """Emit signal for the currently selected result."""
-        row = self._results_list.currentRow()
-        if 0 <= row < len(self._results):
-            self.add_to_playlist_requested.emit(self._results[row])
+        """Emit signal for all selected results (batch add)."""
+        for item in self._results_list.selectedItems():
+            row = self._results_list.row(item)
+            if 0 <= row < len(self._results):
+                self.add_to_playlist_requested.emit(self._results[row])
 
     def _on_download(self) -> None:
-        """Emit download signal for the currently selected result."""
-        row = self._results_list.currentRow()
-        if 0 <= row < len(self._results):
-            self.download_requested.emit(self._results[row])
+        """Emit download signal for all selected results (batch download)."""
+        for item in self._results_list.selectedItems():
+            row = self._results_list.row(item)
+            if 0 <= row < len(self._results):
+                self.download_requested.emit(self._results[row])

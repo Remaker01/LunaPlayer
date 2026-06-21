@@ -26,8 +26,8 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QDir, Qt, QTimer, Slot
-from PySide6.QtGui import QAction, QFont, QKeySequence
+from PySide6.QtCore import QDir, Qt, QTimer, Slot, QUrl
+from PySide6.QtGui import QAction, QFont, QKeySequence, QDesktopServices, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -58,6 +58,8 @@ from app.ui.lyrics_window import LrcParser, LyricsWindow
 from app.ui.widgets.playlist_widget import PlaylistWidget
 from app.ui.widgets.search_panel import SearchPanel
 from app.ui.widgets.song_info_dialog import SongInfoDialog
+from app.services.music_provider import MusicProvider
+import app.services.config as cfg
 
 logger = logging.getLogger(__name__)
 
@@ -137,6 +139,16 @@ class MainWindow(QMainWindow):
         self._lyrics_window = LyricsWindow()
         self._lyrics_window.hide()
 
+        # ---- Search provider ----
+        self._search_provider = MusicProvider(self)
+        self._search_panel.set_search_provider(self._search_provider)
+        self._download_dir: str = cfg.get("download_dir",
+                                          str(Path.home() / "Music" / "SmallPlayer"))
+        self._active_downloads: int = 0
+
+        # ---- Global shortcuts ----
+        self._setup_shortcuts()
+
         # ---- Connect signals ----
         self._connect_signals()
 
@@ -181,6 +193,16 @@ class MainWindow(QMainWindow):
         export_action.setShortcut(QKeySequence("Ctrl+E"))
         export_action.triggered.connect(self._on_export_playlist)
         file_menu.addAction(export_action)
+
+        file_menu.addSeparator()
+
+        dl_dir_action = QAction("设置下载目录(&D)…", self)
+        dl_dir_action.triggered.connect(self._on_set_download_dir)
+        file_menu.addAction(dl_dir_action)
+
+        open_dl_action = QAction("打开下载目录(&L)", self)
+        open_dl_action.triggered.connect(self._on_open_download_dir)
+        file_menu.addAction(open_dl_action)
 
         file_menu.addSeparator()
 
@@ -432,6 +454,12 @@ class MainWindow(QMainWindow):
         # -- SearchPanel --
         self._search_panel.add_to_playlist_requested.connect(self._on_search_add_to_playlist)
         self._search_panel.download_requested.connect(self._on_search_download)
+
+        # -- Search provider --
+        self._search_provider.results_ready.connect(self._search_panel.display_results)
+        self._search_provider.search_error.connect(self._on_search_error)
+        self._search_provider.download_ready.connect(self._on_download_ready)
+        self._search_provider.download_error.connect(self._on_download_error)
 
     # ================================================================
     # Slots – Playlist
@@ -892,7 +920,7 @@ class MainWindow(QMainWindow):
         self._status_label.setText(f"⚠ 扫描错误: {message}")
 
     # ================================================================
-    # Slots – Search Panel
+    # Slots – Search Panel & Downloads
     # ================================================================
 
     @Slot(object)
@@ -903,9 +931,53 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def _on_search_download(self, song: Song) -> None:
-        """Trigger download of a search result song."""
-        # Placeholder: this will be connected to a download manager later.
-        self._status_label.setText(f"已加入下载队列: {song.title}")
+        """Download a search result song (async, multiple run in parallel)."""
+        self._active_downloads += 1
+        self._search_provider.download(song, self._download_dir)
+        self._status_label.setText(
+            f"正在下载 ({self._active_downloads} 个活跃): {song.title}…")
+
+    @Slot(str)
+    def _on_search_error(self, message: str) -> None:
+        """Display search error."""
+        self._status_label.setText(f"⚠ 搜索错误: {message}")
+
+    @Slot(object, str)
+    def _on_download_ready(self, song: Song, local_path: str) -> None:
+        """A song download finished – add it to database and playlist."""
+        self._active_downloads = max(0, self._active_downloads - 1)
+        song.file_path = local_path
+        self._playlist_manager.add_song(song)
+        self._status_label.setText(
+            f"下载完成: {song.title}"
+            + (f"  (剩余 {self._active_downloads} 个)" if self._active_downloads else ""))
+
+    @Slot(object, str)
+    def _on_download_error(self, song: Song, message: str) -> None:
+        """Display download error."""
+        self._active_downloads = max(0, self._active_downloads - 1)
+        self._status_label.setText(
+            f"⚠ 下载失败 {song.title}: {message}"
+            + (f"  (剩余 {self._active_downloads} 个)" if self._active_downloads else ""))
+
+    @Slot()
+    def _on_set_download_dir(self) -> None:
+        """Open a directory picker to change the download location."""
+        new_dir = QFileDialog.getExistingDirectory(
+            self, "选择下载目录", self._download_dir,
+        )
+        if new_dir:
+            self._download_dir = new_dir
+            cfg.set("download_dir", new_dir)
+            self._status_label.setText(f"下载目录已设为: {new_dir}")
+
+    @Slot()
+    def _on_open_download_dir(self) -> None:
+        """Open the download directory in the system file manager."""
+        path = Path(self._download_dir)
+        path.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+        self._status_label.setText(f"已打开: {path}")
 
     # ================================================================
     # Internal helpers
@@ -940,6 +1012,18 @@ class MainWindow(QMainWindow):
         minutes = seconds // 60
         secs = seconds % 60
         return f"{minutes}:{secs:02d}"
+
+    # ------------------------------------------------------------------
+    # Global shortcuts (QShortcut — works regardless of focus widget)
+    # ------------------------------------------------------------------
+
+    def _setup_shortcuts(self) -> None:
+        """Register global keyboard shortcuts."""
+        # Space → play/pause (ApplicationShortcut context so it works even
+        # when the search input or any other child widget has focus).
+        sc = QShortcut(QKeySequence(Qt.Key_Space), self)
+        sc.setContext(Qt.ApplicationShortcut)
+        sc.activated.connect(self._on_play_pause)
 
     def _load_lyrics_for(self, song: Song) -> None:
         """Try to load an LRC file for *song* and feed it to the lyrics window."""
