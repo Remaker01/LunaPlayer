@@ -80,7 +80,7 @@ def main() -> None:
     _load_stylesheet(app)
 
     # -- Application icon --
-    icon_path = Path(__file__).parent.parent / "resources" / "icon.png"
+    icon_path = Path(__file__).parent.parent / "resources" / "icon.ico"
     if icon_path.exists():
         from PySide6.QtGui import QIcon
         app.setWindowIcon(QIcon(str(icon_path)))
@@ -124,7 +124,6 @@ def main() -> None:
     db_manager.close()
 
     sys.exit(exit_code)
-
 
 if __name__ == "__main__":
     main()
