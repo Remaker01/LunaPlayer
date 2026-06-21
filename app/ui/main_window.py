@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QDir, Qt, Slot, QUrl
-from PySide6.QtGui import QAction, QKeySequence, QDesktopServices, QShortcut
+from PySide6.QtGui import QAction, QIcon, QKeySequence, QDesktopServices, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -44,6 +44,8 @@ from PySide6.QtWidgets import (
     QStatusBar,
     QVBoxLayout,
     QWidget,
+    QSystemTrayIcon,
+    QMenu,
 )
 
 from app.core.audio_engine import AudioEngine, PlayState
@@ -151,6 +153,9 @@ class MainWindow(QMainWindow):
 
         # ---- Apply persisted settings ----
         self._apply_saved_settings()
+
+        # ---- System tray ----
+        self._setup_tray_icon()
 
     # ================================================================
     # UI Construction
@@ -581,6 +586,7 @@ class MainWindow(QMainWindow):
             self._play_btn.setText("▶")
             self._progress_slider.setValue(0)
             self._time_current.setText("0:00")
+        self._update_tray_play_pause()
 
     @Slot(str)
     def _on_audio_error(self, message: str) -> None:
@@ -994,6 +1000,65 @@ class MainWindow(QMainWindow):
         self._lyrics_window.set_lyrics_font_size(saved.lyrics_font_size)
         self._volume_slider.setValue(saved.volume)
         self._playlist_manager.set_play_mode(saved.default_play_mode)
+
+    # ================================================================
+    # System tray
+    # ================================================================
+
+    def _setup_tray_icon(self) -> None:
+        """Create the system tray icon with a context menu."""
+        self._tray_icon = QSystemTrayIcon(self)
+
+        # Try to load app icon, fall back to a musical note icon.
+        icon_path = Path(__file__).parent.parent.parent / "resources" / "icon.png"
+        if icon_path.exists():
+            self._tray_icon.setIcon(QIcon(str(icon_path)))
+        else:
+            self._tray_icon.setIcon(self.style().standardIcon(
+                self.style().SP_MediaPlay))
+
+        self._tray_icon.setToolTip(self.WINDOW_TITLE)
+
+        # -- Context menu --
+        tray_menu = QMenu(self)
+
+        self._tray_play_action = tray_menu.addAction("▶ 播放")
+        self._tray_play_action.triggered.connect(self._on_play_pause)
+
+        tray_menu.addSeparator()
+
+        prev_action = tray_menu.addAction("⏮ 上一首")
+        prev_action.triggered.connect(self._on_previous)
+
+        next_action = tray_menu.addAction("⏭ 下一首")
+        next_action.triggered.connect(self._on_next)
+
+        tray_menu.addSeparator()
+
+        quit_action = tray_menu.addAction("⏹ 退出")
+        quit_action.triggered.connect(QApplication.instance().quit)
+
+        self._tray_icon.setContextMenu(tray_menu)
+
+        # Double-click on the tray icon → play/pause.
+        self._tray_icon.activated.connect(self._on_tray_activated)
+
+        self._tray_icon.show()
+
+    @Slot()
+    def _update_tray_play_pause(self) -> None:
+        """Sync the tray menu's play/pause text with the current state."""
+        state = self._audio_engine.state
+        if state == PlayState.PLAYING:
+            self._tray_play_action.setText("⏸ 暂停")
+        else:
+            self._tray_play_action.setText("▶ 播放")
+
+    @Slot(int)
+    def _on_tray_activated(self, reason: int) -> None:
+        """Handle tray icon activation (double-click → play/pause)."""
+        if reason == QSystemTrayIcon.DoubleClick:
+            self._on_play_pause()
 
     # ================================================================
     # Internal helpers

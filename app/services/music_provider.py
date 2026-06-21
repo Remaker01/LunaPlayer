@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import json, logging, re
 from pathlib import Path
-from urllib.parse import urljoin
+from urllib.parse import quote, urlencode, urljoin
 
 import httpcore
 from PySide6.QtCore import QObject, QThread, Signal
@@ -81,10 +81,13 @@ class _SearchWorker(_Worker):
 
     def run_task(self) -> None:
         with httpcore.ConnectionPool(http2=True, http1=False) as pool:
-            body = f"input={self._keyword}&filter=name&type={self._source}&page={self._page}".encode()
+            params = {"input": self._keyword, "filter": "name",
+                      "type": self._source, "page": self._page}
+            body = urlencode(params).encode()
+            referer = f"{BASE_URL}?name={quote(self._keyword, safe='')}&type={self._source}"
             resp = pool.request("POST", BASE_URL,
                 headers=_headers({"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                                  "Referer": f"{BASE_URL}?name={self._keyword}&type={self._source}"}),
+                                  "Referer": referer}),
                 content=body)
         if resp.status != 200: self.error.emit(f"HTTP {resp.status}"); return
         payload = json.loads(resp.content)
