@@ -1,0 +1,969 @@
+"""
+MainWindow – the primary application window.
+
+Layout
+------
+┌──────────────────────────────────────────────────┐
+│  Menu:  File  |  Playback  |  View  |  Help      │
+├──────────────────────────┬───────────────────────┤
+│                          │                       │
+│    PlaylistWidget        │    SearchPanel        │
+│    (current queue)       │    (online search)    │
+│                          │                       │
+├──────────────────────────┴───────────────────────┤
+│ ♫ Title - Artist    ═══●═══ 3:45 / 5:30   🔊━━━●━│
+│  [⏮] [▶/⏸] [⏭] [⏹]       Mode: 🔁               │
+└──────────────────────────────────────────────────┘
+
+Signals are used to communicate with core modules (AudioEngine,
+PlaylistManager, MusicScanner) – the MainWindow never calls core
+methods directly except to wire up initial connections.
+"""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from typing import Optional
+
+from PySide6.QtCore import QDir, Qt, QTimer, Slot
+from PySide6.QtGui import QAction, QFont, QKeySequence
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QApplication,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMenu,
+    QMenuBar,
+    QMessageBox,
+    QProgressBar,
+    QPushButton,
+    QScrollArea,
+    QSlider,
+    QSizePolicy,
+    QSplitter,
+    QStatusBar,
+    QVBoxLayout,
+    QWidget,
+)
+
+from app.core.audio_engine import AudioEngine, PlayState
+from app.core.music_scanner import MusicScanner
+from app.core.playlist_manager import PlaylistManager
+from app.models.song import PlayMode, Song
+from app.ui.lyrics_window import LrcParser, LyricsWindow
+from app.ui.widgets.playlist_widget import PlaylistWidget
+from app.ui.widgets.search_panel import SearchPanel
+from app.ui.widgets.song_info_dialog import SongInfoDialog
+
+logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Helper: extract a tag from a mutagen metadata object
+# ---------------------------------------------------------------------------
+
+def _try_tag(metadata, *names: str) -> str:
+    """Return the first non-empty tag found among *names* in *metadata*."""
+    for name in names:
+        if not hasattr(metadata, "get"):
+            continue
+        val = metadata.get(name)
+        if val:
+            # mutagen returns a list of strings for most frames.
+            if isinstance(val, list):
+                return str(val[0])
+            return str(val)
+    return ""
+
+
+class MainWindow(QMainWindow):
+    """Main application window – orchestrates UI and core module interaction."""
+
+    # ------------------------------------------------------------------
+    # Constants
+    # ------------------------------------------------------------------
+
+    WINDOW_TITLE = "SmallPlayer - 音乐播放器"
+    DEFAULT_WIDTH = 1100
+    DEFAULT_HEIGHT = 700
+    MIN_WIDTH = 800
+    MIN_HEIGHT = 500
+
+    # Play mode display symbols (Chinese labels).
+    _PLAY_MODE_SYMBOLS = {
+        PlayMode.SEQUENTIAL: "▶ 顺序播放",
+        PlayMode.LOOP: "🔁 列表循环",
+        PlayMode.SINGLE_LOOP: "🔂 单曲循环",
+    }
+
+    def __init__(self, playlist_manager: PlaylistManager,
+                 audio_engine: AudioEngine,
+                 music_scanner: MusicScanner,
+                 parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+
+        self._playlist_manager = playlist_manager
+        self._audio_engine = audio_engine
+        self._music_scanner = music_scanner
+
+        # -- Track whether we are updating the slider programmatically --
+        self._slider_dragging: bool = False
+
+        # -- Collect songs from the most recent scan (used to replace
+        #    the playlist on scan_finished rather than reloading from DB).
+        self._scanned_songs: list[Song] = []
+        self._last_scanned_dir: str = ""
+
+        # ---- Build UI ----
+        self._setup_window()
+        self._create_menu_bar()
+
+        # Central wrapper: [splitter (playlist | search), playback bar]
+        central = QWidget()
+        self.setCentralWidget(central)
+        root_layout = QVBoxLayout(central)
+        root_layout.setContentsMargins(0, 0, 0, 0)
+        root_layout.setSpacing(0)
+
+        self._create_central_area(root_layout)
+        self._create_playback_bar(root_layout)
+        self._create_status_bar()
+
+        # ---- Create lyrics window (hidden by default) ----
+        self._lyrics_window = LyricsWindow()
+        self._lyrics_window.hide()
+
+        # ---- Connect signals ----
+        self._connect_signals()
+
+    # ================================================================
+    # UI Construction
+    # ================================================================
+
+    def _setup_window(self) -> None:
+        """Configure the main window geometry and properties."""
+        self.setWindowTitle(self.WINDOW_TITLE)
+        self.setMinimumSize(self.MIN_WIDTH, self.MIN_HEIGHT)
+        self.resize(self.DEFAULT_WIDTH, self.DEFAULT_HEIGHT)
+
+    # ---------------------------------------------------------------
+    # Menu bar
+    # ---------------------------------------------------------------
+
+    def _create_menu_bar(self) -> None:
+        menu_bar = self.menuBar()
+
+        # -- File menu --
+        file_menu = menu_bar.addMenu("文件(&F)")
+
+        open_action = QAction("打开目录(&O)…", self)
+        open_action.setShortcut(QKeySequence("Ctrl+O"))
+        open_action.triggered.connect(self._on_open_directory)
+        file_menu.addAction(open_action)
+
+        open_file_action = QAction("打开文件(&F)…", self)
+        open_file_action.setShortcut(QKeySequence("Ctrl+F"))
+        open_file_action.triggered.connect(self._on_open_files)
+        file_menu.addAction(open_file_action)
+
+        file_menu.addSeparator()
+
+        import_action = QAction("导入播放列表(&I)…", self)
+        import_action.setShortcut(QKeySequence("Ctrl+I"))
+        import_action.triggered.connect(self._on_import_playlist)
+        file_menu.addAction(import_action)
+
+        export_action = QAction("导出播放列表(&E)…", self)
+        export_action.setShortcut(QKeySequence("Ctrl+E"))
+        export_action.triggered.connect(self._on_export_playlist)
+        file_menu.addAction(export_action)
+
+        file_menu.addSeparator()
+
+        exit_action = QAction("退出(&X)", self)
+        exit_action.setShortcut(QKeySequence("Ctrl+Q"))
+        exit_action.triggered.connect(QApplication.instance().quit)
+        file_menu.addAction(exit_action)
+
+        # -- Playback menu --
+        playback_menu = menu_bar.addMenu("播放(&P)")
+
+        self._mode_action = QAction("播放模式", self)
+        self._mode_action.triggered.connect(self._on_cycle_play_mode)
+        playback_menu.addAction(self._mode_action)
+        self._update_play_mode_action()
+
+        playback_menu.addSeparator()
+
+        prev_action = QAction("上一首(&R)", self)
+        prev_action.setShortcut(QKeySequence("Ctrl+Left"))
+        prev_action.triggered.connect(self._on_previous)
+        playback_menu.addAction(prev_action)
+
+        next_action = QAction("下一首(&N)", self)
+        next_action.setShortcut(QKeySequence("Ctrl+Right"))
+        next_action.triggered.connect(self._on_next)
+        playback_menu.addAction(next_action)
+
+        playback_menu.addSeparator()
+
+        # -- View menu --
+        view_menu = menu_bar.addMenu("视图(&V)")
+
+        self._show_lyrics_action = QAction("显示歌词窗口(&L)", self)
+        self._show_lyrics_action.setCheckable(True)
+        self._show_lyrics_action.setChecked(False)
+        self._show_lyrics_action.setShortcut(QKeySequence("Ctrl+L"))
+        self._show_lyrics_action.triggered.connect(self._on_toggle_lyrics)
+        view_menu.addAction(self._show_lyrics_action)
+
+    # ---------------------------------------------------------------
+    # Central area – playlist + search
+    # ---------------------------------------------------------------
+
+    def _create_central_area(self, parent_layout: QVBoxLayout) -> None:
+        """Build the splitter layout with PlaylistWidget and SearchPanel."""
+        # Outer margin wrapper for the splitter area.
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(8, 4, 8, 4)
+        content_layout.setSpacing(4)
+
+        # -- Splitter --
+        splitter = QSplitter(Qt.Horizontal)
+
+        # Left: Playlist
+        self._playlist_widget = PlaylistWidget()
+        splitter.addWidget(self._playlist_widget)
+
+        # Right: Search
+        search_scroll = QScrollArea()
+        search_scroll.setWidgetResizable(True)
+        search_scroll.setFrameShape(QFrame.NoFrame)
+        self._search_panel = SearchPanel()
+        search_scroll.setWidget(self._search_panel)
+        splitter.addWidget(search_scroll)
+
+        # Set reasonable initial sizes.
+        splitter.setSizes([int(self.DEFAULT_WIDTH * 0.6),
+                           int(self.DEFAULT_WIDTH * 0.4)])
+
+        content_layout.addWidget(splitter, 1)
+        parent_layout.addWidget(content, 1)
+
+    # ---------------------------------------------------------------
+    # Playback control bar
+    # ---------------------------------------------------------------
+
+    def _create_playback_bar(self, parent_layout: QVBoxLayout) -> None:
+        """Build the bottom playback controls bar."""
+        bar = QWidget()
+        bar.setObjectName("playbackBar")
+        bar.setStyleSheet("""
+            #playbackBar {
+                background-color: #181825;
+                border-top: 1px solid #313244;
+            }
+        """)
+
+        layout = QVBoxLayout(bar)
+        layout.setContentsMargins(8, 4, 8, 8)
+        layout.setSpacing(4)
+
+        # -- Row 0: Song info + Progress slider --
+        progress_row = QHBoxLayout()
+        progress_row.setSpacing(8)
+
+        # Song info
+        self._song_info_label = QLabel("未播放")
+        self._song_info_label.setObjectName("titleLabel")
+        progress_row.addWidget(self._song_info_label, 1)
+
+        # Time labels
+        self._time_current = QLabel("0:00")
+        self._time_current.setObjectName("timeLabel")
+        progress_row.addWidget(self._time_current)
+
+        # Progress slider
+        self._progress_slider = QSlider(Qt.Horizontal)
+        self._progress_slider.setRange(0, 0)  # will be updated when duration is known
+        self._progress_slider.setValue(0)
+        self._progress_slider.sliderPressed.connect(self._on_slider_pressed)
+        self._progress_slider.sliderReleased.connect(self._on_slider_released)
+        self._progress_slider.sliderMoved.connect(self._on_slider_moved)
+        progress_row.addWidget(self._progress_slider, 3)
+
+        self._time_total = QLabel("0:00")
+        self._time_total.setObjectName("timeLabel")
+        progress_row.addWidget(self._time_total)
+
+        # Volume
+        self._volume_slider = QSlider(Qt.Horizontal)
+        self._volume_slider.setObjectName("volumeSlider")
+        self._volume_slider.setRange(0, 100)
+        self._volume_slider.setValue(80)
+        self._volume_slider.setFixedWidth(100)
+        self._volume_slider.valueChanged.connect(self._on_volume_changed)
+        progress_row.addWidget(self._volume_slider)
+
+        self._volume_label = QLabel("80%")
+        self._volume_label.setObjectName("timeLabel")
+        self._volume_label.setFixedWidth(36)
+        progress_row.addWidget(self._volume_label)
+
+        self._volume_muted: bool = False
+        self._volume_before_mute: int = 80
+        self._mute_btn = QPushButton("🔊")
+        self._mute_btn.setFixedSize(36, 30)
+        self._mute_btn.setStyleSheet("background: transparent; border: none; font-size: 16px;")
+        self._mute_btn.clicked.connect(self._on_toggle_mute)
+        progress_row.addWidget(self._mute_btn)
+
+        layout.addLayout(progress_row)
+
+        # -- Row 1: Transport buttons + Play mode --
+        transport_row = QHBoxLayout()
+        transport_row.setSpacing(6)
+
+        # Previous
+        self._prev_btn = QPushButton("⏮")
+        self._prev_btn.setObjectName("transportBtn")
+        self._prev_btn.clicked.connect(self._on_previous)
+        transport_row.addWidget(self._prev_btn)
+
+        # Play/Pause
+        self._play_btn = QPushButton("▶")
+        self._play_btn.setObjectName("transportBtn")
+        self._play_btn.clicked.connect(self._on_play_pause)
+        transport_row.addWidget(self._play_btn)
+
+        # Stop
+        self._stop_btn = QPushButton("⏹")
+        self._stop_btn.setObjectName("transportBtn")
+        self._stop_btn.clicked.connect(self._on_stop)
+        transport_row.addWidget(self._stop_btn)
+
+        # Next
+        self._next_btn = QPushButton("⏭")
+        self._next_btn.setObjectName("transportBtn")
+        self._next_btn.clicked.connect(self._on_next)
+        transport_row.addWidget(self._next_btn)
+
+        # Spacer
+        transport_row.addStretch(1)
+
+        # Play mode button
+        self._mode_btn = QPushButton()
+        self._mode_btn.clicked.connect(self._on_cycle_play_mode)
+        # Init text from the current play mode, since the signal may not
+        # fire on startup (the mode hasn't *changed* yet).
+        self._refresh_mode_btn()
+        transport_row.addWidget(self._mode_btn)
+
+        layout.addLayout(transport_row)
+
+        parent_layout.addWidget(bar)
+
+    def _create_status_bar(self) -> None:
+        """Add a status bar for scanning progress and messages."""
+        status = QStatusBar()
+        status.setStyleSheet("""
+            QStatusBar {
+                background-color: #181825;
+                border-top: 1px solid #313244;
+                border-bottom: 1px solid #313244;
+                font-size: 11px;
+                color: #6c7086;
+            }
+        """)
+
+        self._scan_progress = QProgressBar()
+        self._scan_progress.setRange(0, 100)
+        self._scan_progress.setValue(0)
+        self._scan_progress.setFixedWidth(160)
+        self._scan_progress.hide()
+        status.addPermanentWidget(self._scan_progress)
+
+        self._status_label = QLabel("就绪")
+        status.addWidget(self._status_label)
+
+        self.setStatusBar(status)
+
+    # ================================================================
+    # Signal connections
+    # ================================================================
+
+    def _connect_signals(self) -> None:
+        """Wire up all core module signals to UI slots."""
+
+        # -- PlaylistManager -> PlaylistWidget --
+        self._playlist_manager.playlist_loaded.connect(self._on_playlist_loaded)
+        self._playlist_manager.song_added.connect(self._on_song_added)
+        self._playlist_manager.song_removed.connect(self._on_song_removed)
+        self._playlist_manager.current_song_changed.connect(self._on_current_song_changed)
+        self._playlist_manager.current_index_changed.connect(self._on_current_index_changed)
+        self._playlist_manager.play_mode_changed.connect(self._on_play_mode_changed)
+
+        # -- PlaylistWidget -> PlaylistManager --
+        self._playlist_widget.play_requested.connect(self._on_play_requested)
+        self._playlist_widget.remove_requested.connect(self._on_remove_requested)
+        self._playlist_widget.clear_requested.connect(self._on_clear_requested)
+        self._playlist_widget.order_changed.connect(self._on_order_changed)
+        self._playlist_widget.info_requested.connect(self._on_info_requested)
+
+        # -- AudioEngine -> UI --
+        self._audio_engine.position_changed.connect(self._on_position_changed)
+        self._audio_engine.duration_changed.connect(self._on_duration_changed)
+        self._audio_engine.state_changed.connect(self._on_state_changed)
+        self._audio_engine.track_finished.connect(self._on_track_finished)
+        self._audio_engine.error_occurred.connect(self._on_audio_error)
+
+        # -- MusicScanner -> UI --
+        self._music_scanner.scan_started.connect(self._on_scan_started)
+        self._music_scanner.progress.connect(self._on_scan_progress)
+        self._music_scanner.song_found.connect(self._on_scan_song_found)
+        self._music_scanner.scan_finished.connect(self._on_scan_finished)
+        self._music_scanner.error_occurred.connect(self._on_scan_error)
+
+        # -- SearchPanel --
+        self._search_panel.add_to_playlist_requested.connect(self._on_search_add_to_playlist)
+        self._search_panel.download_requested.connect(self._on_search_download)
+
+    # ================================================================
+    # Slots – Playlist
+    # ================================================================
+
+    @Slot()
+    def _on_playlist_loaded(self) -> None:
+        """Refresh the playlist widget when the playlist is loaded."""
+        songs = self._playlist_manager.playlist
+        self._playlist_widget.load_songs(songs)
+        self._update_song_info(None)
+
+    @Slot(int)
+    def _on_song_added(self, index: int) -> None:
+        """A song was added at *index* – refresh view."""
+        songs = self._playlist_manager.playlist
+        self._playlist_widget.load_songs(songs)
+
+    @Slot(int, object)
+    def _on_song_removed(self, index: int, song: object) -> None:
+        """A song was removed – refresh view."""
+        songs = self._playlist_manager.playlist
+        self._playlist_widget.load_songs(songs)
+
+    @Slot(object)
+    def _on_current_song_changed(self, song: Optional[Song]) -> None:
+        """The current song changed – update UI and load into audio engine."""
+        if song is not None and song.file_path:
+            logger.info("Playing: %s - %s", song.artist, song.title)
+            self._audio_engine.play(song.file_path)
+            self._load_lyrics_for(song)
+        else:
+            # Song removed / playlist cleared → stop playback.
+            self._audio_engine.stop()
+
+        self._update_song_info(song)
+
+    @Slot(int)
+    def _on_current_index_changed(self, index: int) -> None:
+        """Highlight the current row in the playlist."""
+        self._playlist_widget.highlight_row(index)
+
+    @Slot(object)
+    def _on_play_mode_changed(self, mode: PlayMode) -> None:
+        """Update play mode display."""
+        self._update_play_mode_action()
+        self._refresh_mode_btn()
+
+    # ---------------------------------------------------------------
+    # Slots – PlaylistWidget actions
+    # ---------------------------------------------------------------
+
+    @Slot(int)
+    def _on_play_requested(self, index: int) -> None:
+        """User double-clicked or chose 'Play' – jump to that song."""
+        self._playlist_manager.go_to(index)
+
+    @Slot(int)
+    def _on_remove_requested(self, index: int) -> None:
+        """Remove the song at *index* from the playlist."""
+        self._playlist_manager.remove_song(index)
+
+    @Slot()
+    def _on_clear_requested(self) -> None:
+        """Clear the entire playlist."""
+        self._playlist_manager.clear()
+
+    @Slot(list)
+    def _on_order_changed(self, songs: list[Song]) -> None:
+        """Drag-and-drop reorder: reload the playlist with the new order."""
+        # Keep the same current index if possible.
+        current_song = self._playlist_manager.get_current_song()
+        new_index = 0
+        for i, s in enumerate(songs):
+            if current_song and s.file_path == current_song.file_path:
+                new_index = i
+                break
+        self._playlist_manager.load_playlist(songs, new_index)
+
+    @Slot(int)
+    def _on_info_requested(self, index: int) -> None:
+        """Show the SongInfoDialog for the song at *index*."""
+        songs = self._playlist_manager.playlist
+        if 0 <= index < len(songs):
+            dialog = SongInfoDialog(songs[index], self)
+            dialog.exec()
+
+    # ================================================================
+    # Slots – Audio Engine
+    # ================================================================
+
+    @Slot(int)
+    def _on_position_changed(self, position_ms: int) -> None:
+        """Update progress slider and time label."""
+        if not self._slider_dragging:
+            self._progress_slider.setValue(position_ms)
+        self._time_current.setText(self._format_time(position_ms))
+
+        # Sync lyrics window.
+        if self._lyrics_window.isVisible():
+            self._lyrics_window.sync_position(position_ms)
+
+    @Slot(int)
+    def _on_duration_changed(self, duration_ms: int) -> None:
+        """Update slider range and total time label."""
+        self._progress_slider.setRange(0, max(1, duration_ms))
+        self._time_total.setText(self._format_time(duration_ms))
+
+    @Slot(int)
+    def _on_state_changed(self, state_int: int) -> None:
+        """Update play/pause button icon based on state."""
+        state = PlayState(state_int)
+        if state == PlayState.PLAYING:
+            self._play_btn.setText("⏸")
+        elif state == PlayState.PAUSED:
+            self._play_btn.setText("▶")
+        else:  # STOPPED
+            self._play_btn.setText("▶")
+            self._progress_slider.setValue(0)
+            self._time_current.setText("0:00")
+
+    @Slot(str)
+    def _on_audio_error(self, message: str) -> None:
+        """Display audio engine errors in the status bar."""
+        self._status_label.setText(f"⚠ 播放错误: {message}")
+        logger.error("Audio error: %s", message)
+
+    @Slot()
+    def _on_track_finished(self) -> None:
+        """The current track ended naturally – advance to the next song."""
+        self._playlist_manager.next()
+
+    # ================================================================
+    # Slots – Transport controls
+    # ================================================================
+
+    @Slot()
+    def _on_play_pause(self) -> None:
+        """Toggle between play and pause."""
+        state = self._audio_engine.state
+        if state == PlayState.PLAYING:
+            self._audio_engine.pause()
+        elif state == PlayState.PAUSED:
+            self._audio_engine.resume()
+        else:
+            # Stopped – play from the current playlist selection.
+            song = self._playlist_manager.get_current_song()
+            if song is not None:
+                self._audio_engine.play(song.file_path)
+            else:
+                # Try to start from the first song.
+                songs = self._playlist_manager.playlist
+                if songs:
+                    self._playlist_manager.go_to(0)
+
+    @Slot()
+    def _on_stop(self) -> None:
+        """Stop playback."""
+        self._audio_engine.stop()
+
+    @Slot()
+    def _on_previous(self) -> None:
+        """Go to the previous track."""
+        self._playlist_manager.previous()
+
+    @Slot()
+    def _on_next(self) -> None:
+        """Go to the next track."""
+        self._playlist_manager.next()
+
+    # ================================================================
+    # Slots – Progress slider
+    # ================================================================
+
+    @Slot()
+    def _on_slider_pressed(self) -> None:
+        """User starts dragging the progress slider."""
+        self._slider_dragging = True
+
+    @Slot()
+    def _on_slider_released(self) -> None:
+        """User releases the progress slider – seek to the chosen position."""
+        self._slider_dragging = False
+        pos = self._progress_slider.value()
+        max_pos = self._progress_slider.maximum()
+        # Clamp to at least 1 s before the end so that a seek to the very
+        # tail of the track doesn't trigger immediate EOF and an unexpected
+        # playlist-stop in SEQUENTIAL mode.
+        if pos > 0 and max_pos > 2000 and pos >= max_pos - 1000:
+            pos = max_pos - 1000
+        self._audio_engine.seek(pos)
+
+    @Slot(int)
+    def _on_slider_moved(self, value: int) -> None:
+        """Update the time label while dragging."""
+        self._time_current.setText(self._format_time(value))
+
+    # ================================================================
+    # Slots – Volume
+    # ================================================================
+
+    @Slot(int)
+    def _on_volume_changed(self, value: int) -> None:
+        """Adjust audio engine volume (0-100 mapped to 0.0-1.0)."""
+        self._volume_label.setText(f"{value}%")
+        if value == 0:
+            self._mute_btn.setText("🔇")
+        else:
+            self._mute_btn.setText("🔊" if value <= 70 else "🔊")
+        self._audio_engine.set_volume(value / 100.0)
+
+    @Slot()
+    def _on_toggle_mute(self) -> None:
+        """Toggle between muted and previous volume."""
+        if self._volume_muted:
+            # Unmute – restore previous volume.
+            self._volume_muted = False
+            self._volume_slider.setValue(self._volume_before_mute)
+        else:
+            # Mute – save current volume and set to 0.
+            self._volume_muted = True
+            self._volume_before_mute = self._volume_slider.value()
+            self._volume_slider.setValue(0)
+
+    # ================================================================
+    # Slots – Play mode
+    # ================================================================
+
+    @Slot()
+    def _on_cycle_play_mode(self) -> None:
+        """Cycle to the next play mode."""
+        self._playlist_manager.cycle_play_mode()
+
+    # ================================================================
+    # Slots – Menu actions
+    # ================================================================
+
+    @Slot()
+    def _on_open_directory(self) -> None:
+        """Open a directory dialog and scan for music."""
+        directory = QFileDialog.getExistingDirectory(
+            self, "选择音乐目录", QDir.homePath(),
+        )
+        if directory:
+            self._music_scanner.scan_directory(directory)
+
+    @Slot()
+    def _on_open_files(self) -> None:
+        """Open a file dialog to select audio files and add them to playlist."""
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "选择音频文件", QDir.homePath(),
+            "音频文件 (*.mp3 *.flac *.wav *.ogg *.m4a *.wma *.aac *.au *.opus);;所有文件 (*)",
+        )
+        if not files:
+            return
+        songs: list[Song] = []
+        for file_path in files:
+            try:
+                song = self._metadata_from_path(file_path)
+                if song is not None:
+                    songs.append(song)
+            except Exception:
+                continue
+        if songs:
+            # Append to the current playlist.
+            for s in songs:
+                self._playlist_manager.add_song(s)
+            self._status_label.setText(f"已添加 {len(songs)} 首歌曲.")
+
+    @Slot()
+    def _on_import_playlist(self) -> None:
+        """Import an M3U/M3U8 playlist file and load its songs."""
+        path, _ = QFileDialog.getOpenFileName(
+            self, "导入播放列表", QDir.homePath(),
+            "播放列表 (*.m3u *.m3u8);;所有文件 (*)",
+        )
+        if not path:
+            return
+        songs = self._parse_m3u(path)
+        if not songs:
+            self._status_label.setText("未能导入播放列表（文件为空或路径无效）.")
+            return
+        self._playlist_manager.load_playlist(songs)
+        self._status_label.setText(f"已导入 {len(songs)} 首歌曲.")
+
+    @Slot()
+    def _on_export_playlist(self) -> None:
+        """Export the current playlist to an M3U file."""
+        songs = self._playlist_manager.playlist
+        if not songs:
+            self._status_label.setText("播放列表为空，无法导出.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "导出播放列表", QDir.homePath() + "/playlist.m3u8",
+            "播放列表 (*.m3u8 *.m3u);;所有文件 (*)",
+        )
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as f:
+                f.write("#EXTM3U\n")
+                for song in songs:
+                    minutes = int(song.duration) // 60
+                    seconds = int(song.duration) % 60
+                    duration_str = f"{minutes}:{seconds:02d}"
+                    f.write(f"#EXTINF:{int(song.duration)},{song.artist} - {song.title}\n")
+                    f.write(f"{song.file_path}\n")
+            self._status_label.setText(f"已导出 {len(songs)} 首歌曲到 {Path(path).name}.")
+        except Exception as exc:
+            self._status_label.setText(f"导出失败: {exc}")
+            logger.error("Export error: %s", exc)
+
+    # -----------------------------------------------------------------
+    # Helpers
+    # -----------------------------------------------------------------
+
+    @staticmethod
+    def _parse_m3u(path: str) -> list[Song]:
+        """Parse an M3U/M3U8 file and return a list of Songs for existing files."""
+        songs: list[Song] = []
+        base_dir = Path(path).parent
+        try:
+            lines = Path(path).read_text(encoding="utf-8").splitlines()
+        except Exception:
+            return songs
+
+        for line in lines:
+            line = line.strip()
+            # Skip comments and EXTINF lines.
+            if not line or line.startswith("#"):
+                continue
+            # Resolve relative paths against the playlist directory.
+            file_candidate = Path(line)
+            if not file_candidate.is_absolute():
+                file_candidate = base_dir / line
+            if file_candidate.exists():
+                try:
+                    song = MainWindow._metadata_from_path(str(file_candidate))
+                    if song is not None:
+                        songs.append(song)
+                except Exception:
+                    pass
+        return songs
+
+    @staticmethod
+    def _metadata_from_path(file_path: str) -> Optional[Song]:
+        """Extract metadata from *file_path* using mutagen and return a Song."""
+        import mutagen
+        song = Song(file_path=file_path)
+        try:
+            audio = mutagen.File(file_path)
+            if audio is None:
+                # Fall back to filename.
+                song.title = Path(file_path).stem
+                return song
+
+            title = None
+            if hasattr(audio, "tags") and audio.tags:
+                title = _try_tag(audio.tags, "title", "TIT2")
+            if not title:
+                title = Path(file_path).stem
+            song.title = title
+
+            artist = _try_tag(audio, "artist", "TPE1") if hasattr(audio, "tags") and audio.tags else ""
+            song.artist = artist or ""
+
+            album = _try_tag(audio, "album", "TALB") if hasattr(audio, "tags") and audio.tags else ""
+            song.album = album or ""
+
+            if hasattr(audio.info, "length"):
+                song.duration = float(audio.info.length)
+
+            ext = Path(file_path).suffix.lower()
+            song.file_format = ext.lstrip(".")
+
+            import hashlib
+            try:
+                h = hashlib.sha256()
+                with open(file_path, "rb") as f:
+                    while True:
+                        chunk = f.read(65536)
+                        if not chunk:
+                            break
+                        h.update(chunk)
+                song.file_hash = h.hexdigest()
+            except Exception:
+                pass
+        except Exception:
+            song.title = Path(file_path).stem
+        return song
+
+    @Slot(bool)
+    def _on_toggle_lyrics(self, visible: bool) -> None:
+        """Show or hide the lyrics window."""
+        if visible:
+            # Re-position when showing.
+            self._lyrics_window._move_to_bottom_center()
+            self._lyrics_window.show()
+        else:
+            self._lyrics_window.hide()
+
+    # ================================================================
+    # Slots – Music Scanner
+    # ================================================================
+
+    @Slot(str)
+    def _on_scan_started(self, directory: str) -> None:
+        """Show scanning progress and reset song collector."""
+        self._scanned_songs.clear()
+        self._last_scanned_dir = Path(directory).as_posix()
+        self._scan_progress.setValue(0)
+        self._scan_progress.show()
+        self._status_label.setText(f"正在扫描 {Path(directory).name}…")
+
+    @Slot(int, int)
+    def _on_scan_progress(self, current: int, total: int) -> None:
+        """Update the progress bar during scanning."""
+        if total > 0:
+            pct = int(current * 100 / total)
+            self._scan_progress.setValue(pct)
+        self._status_label.setText(f"正在扫描… {current}/{total}")
+
+    @Slot(object)
+    def _on_scan_song_found(self, song: Song) -> None:
+        """Collect newly found songs during scanning."""
+        self._scanned_songs.append(song)
+
+    @Slot(int)
+    def _on_scan_finished(self, imported: int) -> None:
+        """Scan complete – replace the playlist with scanned songs."""
+        self._scan_progress.hide()
+
+        from app.models.database import DatabaseManager
+        db = getattr(self._music_scanner, "_db", None)
+
+        # Collect songs: newly imported + existing in DB under the scanned dir.
+        songs: list[Song] = list(self._scanned_songs)
+        seen_paths = {s.file_path for s in songs}
+
+        if db is not None and db.is_connected and self._last_scanned_dir:
+            prefix = self._last_scanned_dir
+            for s in db.get_all_songs():
+                if s.file_path.replace("\\", "/").startswith(prefix) and s.file_path not in seen_paths:
+                    songs.append(s)
+                    seen_paths.add(s.file_path)
+
+        if songs:
+            self._playlist_manager.load_playlist(songs)
+            self._status_label.setText(
+                f"扫描完成 – 已加载 {len(songs)} 首歌曲."
+            )
+        else:
+            self._status_label.setText("扫描完成 – 没有发现歌曲.")
+
+    @Slot(str)
+    def _on_scan_error(self, message: str) -> None:
+        """Display scan error in status bar."""
+        self._status_label.setText(f"⚠ 扫描错误: {message}")
+
+    # ================================================================
+    # Slots – Search Panel
+    # ================================================================
+
+    @Slot(object)
+    def _on_search_add_to_playlist(self, song: Song) -> None:
+        """Add a search result song to the current playlist."""
+        self._playlist_manager.add_song(song)
+        self._status_label.setText(f"已添加 '{song.title}' 到播放列表.")
+
+    @Slot(object)
+    def _on_search_download(self, song: Song) -> None:
+        """Trigger download of a search result song."""
+        # Placeholder: this will be connected to a download manager later.
+        self._status_label.setText(f"已加入下载队列: {song.title}")
+
+    # ================================================================
+    # Internal helpers
+    # ================================================================
+
+    @Slot()
+    def _update_play_mode_action(self) -> None:
+        """Refresh the menu item text for play mode."""
+        mode = self._playlist_manager.play_mode
+        symbol = self._PLAY_MODE_SYMBOLS.get(mode, "▶")
+        self._mode_action.setText(f"播放模式: {symbol}")
+
+    def _refresh_mode_btn(self) -> None:
+        """Set the play mode button text from the current play mode."""
+        mode = self._playlist_manager.play_mode
+        symbol = self._PLAY_MODE_SYMBOLS.get(mode, "▶")
+        self._mode_btn.setText(symbol)
+
+    def _update_song_info(self, song: Optional[Song]) -> None:
+        """Update the song info label in the playback bar."""
+        if song is not None and song.title:
+            if song.artist:
+                self._song_info_label.setText(f"♫  {song.artist} – {song.title}")
+            else:
+                self._song_info_label.setText(f"♫  {song.title}")
+        else:
+            self._song_info_label.setText("未播放")
+
+    def _format_time(self, ms: int) -> str:
+        """Convert milliseconds to 'm:ss' format."""
+        seconds = ms // 1000
+        minutes = seconds // 60
+        secs = seconds % 60
+        return f"{minutes}:{secs:02d}"
+
+    def _load_lyrics_for(self, song: Song) -> None:
+        """Try to load an LRC file for *song* and feed it to the lyrics window."""
+        if not self._lyrics_window.isVisible():
+            return
+
+        # Common LRC file naming: same path as audio but with .lrc extension.
+        lrc_path = Path(song.file_path).with_suffix(".lrc")
+        if lrc_path.exists():
+            lines = LrcParser.load(str(lrc_path))
+            self._lyrics_window.load_lyrics(lines)
+        else:
+            # Try looking for a .lrc file in the same directory with the
+            # same base name.
+            self._lyrics_window.load_lyrics([])
+
+    # ================================================================
+    # Cleanup
+    # ================================================================
+
+    def closeEvent(self, event) -> None:
+        """Save playlist state and clean up on window close."""
+        self._playlist_manager.save_to_m3u()
+
+        self._audio_engine.stop()
+        self._lyrics_window.close()
+        super().closeEvent(event)

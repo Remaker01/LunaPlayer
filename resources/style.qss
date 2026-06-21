@@ -1,0 +1,308 @@
+/* ===================================================================
+   SmallPlayer – QSS Stylesheet
+   A modern dark theme with accent colors for the music player.
+   =================================================================== */
+
+/* -------------------------------------------------------------------
+   Global
+   ------------------------------------------------------------------- */
+QWidget {
+    background-color: #1e1e2e;
+    color: #cdd6f4;
+    font-family: "Segoe UI", "Noto Sans", "SF Pro Display", sans-serif;
+    font-size: 13px;
+}
+
+QMainWindow {
+    background-color: #181825;
+}
+
+/* -------------------------------------------------------------------
+   Buttons
+   ------------------------------------------------------------------- */
+QPushButton {
+    background-color: #313244;
+    border: 1px solid #45475a;
+    border-radius: 6px;
+    padding: 6px 14px;
+    color: #cdd6f4;
+    min-height: 24px;
+}
+
+QPushButton:hover {
+    background-color: #45475a;
+    border-color: #585b70;
+}
+
+QPushButton:pressed {
+    background-color: #585b70;
+}
+
+QPushButton:disabled {
+    background-color: #252536;
+    color: #585b70;
+    border-color: #313244;
+}
+
+/* Transport buttons (play/pause/prev/next) – icon-only circular */
+QPushButton#transportBtn {
+    background-color: transparent;
+    border: none;
+    border-radius: 20px;
+    min-width: 40px;
+    min-height: 40px;
+    font-size: 18px;
+}
+
+QPushButton#transportBtn:hover {
+    background-color: #313244;
+}
+
+QPushButton#transportBtn:pressed {
+    background-color: #45475a;
+}
+
+/* -------------------------------------------------------------------
+   Sliders (Volume & Progress)
+   ------------------------------------------------------------------- */
+QSlider::groove:horizontal {
+    background: #313244;
+    height: 6px;
+    border-radius: 3px;
+}
+
+QSlider::handle:horizontal {
+    background: #cba6f7;
+    width: 14px;
+    height: 14px;
+    margin: -4px 0;
+    border-radius: 7px;
+}
+
+QSlider::handle:horizontal:hover {
+    background: #b4befe;
+    width: 16px;
+    height: 16px;
+    margin: -5px 0;
+    border-radius: 8px;
+}
+
+QSlider::sub-page:horizontal {
+    background: #cba6f7;
+    border-radius: 3px;
+}
+
+/* Volume slider – narrower */
+QSlider#volumeSlider::handle:horizontal {
+    background: #a6e3a1;
+}
+
+QSlider#volumeSlider::sub-page:horizontal {
+    background: #a6e3a1;
+}
+
+/* -------------------------------------------------------------------
+   Progress Bar (scanning)
+   ------------------------------------------------------------------- */
+QProgressBar {
+    background-color: #313244;
+    border: none;
+    border-radius: 4px;
+    height: 8px;
+    text-align: center;
+    font-size: 10px;
+    color: #6c7086;
+}
+
+QProgressBar::chunk {
+    background-color: #cba6f7;
+    border-radius: 4px;
+}
+
+/* -------------------------------------------------------------------
+   List / Tree / Table Views
+   ------------------------------------------------------------------- */
+QListView, QTreeView, QTableView {
+    background-color: #1e1e2e;
+    alternate-background-color: #211f30;
+    border: 1px solid #313244;
+    border-radius: 6px;
+    outline: none;
+}
+
+QListView::item, QTreeView::item, QTableView::item {
+    padding: 6px 10px;
+    border-bottom: 1px solid #252536;
+}
+
+QListView::item:selected, QTreeView::item:selected, QTableView::item:selected {
+    background-color: #313244;
+    color: #cdd6f4;
+}
+
+QListView::item:hover, QTreeView::item:hover, QTableView::item:hover {
+    background-color: #2a2a3c;
+}
+
+QListView::item:selected:active {
+    background-color: #45475a;
+}
+
+/* Header */
+QHeaderView::section {
+    background-color: #181825;
+    color: #a6adc8;
+    padding: 5px 8px;
+    border: none;
+    border-bottom: 1px solid #313244;
+    font-weight: 600;
+}
+
+/* -------------------------------------------------------------------
+   Line Edit / Search Box
+   ------------------------------------------------------------------- */
+QLineEdit {
+    background-color: #313244;
+    border: 1px solid #45475a;
+    border-radius: 8px;
+    padding: 8px 12px;
+    color: #cdd6f4;
+    selection-background-color: #cba6f7;
+    selection-color: #1e1e2e;
+}
+
+QLineEdit:focus {
+    border-color: #cba6f7;
+}
+
+QLineEdit::placeholder {
+    color: #6c7086;
+}
+
+/* -------------------------------------------------------------------
+   Labels
+   ------------------------------------------------------------------- */
+QLabel {
+    background: transparent;
+    color: #cdd6f4;
+}
+
+QLabel#titleLabel {
+    font-size: 15px;
+    font-weight: 700;
+    color: #cdd6f4;
+}
+
+QLabel#artistLabel {
+    font-size: 12px;
+    color: #a6adc8;
+}
+
+QLabel#timeLabel {
+    font-size: 11px;
+    color: #6c7086;
+}
+
+/* -------------------------------------------------------------------
+   Group Box
+   ------------------------------------------------------------------- */
+QGroupBox {
+    border: 1px solid #313244;
+    border-radius: 8px;
+    margin-top: 16px;
+    padding-top: 16px;
+    font-weight: 600;
+}
+
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 12px;
+    padding: 0 6px;
+    color: #cba6f7;
+}
+
+/* -------------------------------------------------------------------
+   Scroll Bars
+   ------------------------------------------------------------------- */
+QScrollBar:vertical {
+    background: #1e1e2e;
+    width: 8px;
+    margin: 0;
+}
+
+QScrollBar::handle:vertical {
+    background: #45475a;
+    min-height: 30px;
+    border-radius: 4px;
+}
+
+QScrollBar::handle:vertical:hover {
+    background: #585b70;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    height: 0;
+}
+
+QScrollBar:horizontal {
+    background: #1e1e2e;
+    height: 8px;
+}
+
+QScrollBar::handle:horizontal {
+    background: #45475a;
+    min-width: 30px;
+    border-radius: 4px;
+}
+
+QScrollBar::handle:horizontal:hover {
+    background: #585b70;
+}
+
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0;
+}
+
+/* -------------------------------------------------------------------
+   Menu & Context Menu
+   ------------------------------------------------------------------- */
+QMenu {
+    background-color: #1e1e2e;
+    border: 1px solid #313244;
+    border-radius: 8px;
+    padding: 4px;
+}
+
+QMenu::item {
+    padding: 6px 24px 6px 12px;
+    border-radius: 4px;
+}
+
+QMenu::item:selected {
+    background-color: #313244;
+}
+
+QMenu::separator {
+    height: 1px;
+    background: #313244;
+    margin: 4px 8px;
+}
+
+/* -------------------------------------------------------------------
+   Tooltip
+   ------------------------------------------------------------------- */
+QToolTip {
+    background-color: #313244;
+    color: #cdd6f4;
+    border: 1px solid #45475a;
+    border-radius: 4px;
+    padding: 4px 8px;
+}
+
+/* -------------------------------------------------------------------
+   Lyrics Window (always-on-top overlay)
+   ------------------------------------------------------------------- */
+#lyricsWindow {
+    background-color: rgba(30, 30, 46, 200);
+    border: none;
+}
