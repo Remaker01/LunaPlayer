@@ -26,8 +26,8 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QDir, Qt, Slot, QUrl
-from PySide6.QtGui import QAction, QIcon, QKeySequence, QDesktopServices, QShortcut
+from PySide6.QtCore import QDir, Qt, QTimer, Slot, QUrl
+from PySide6.QtGui import QAction, QDesktopServices, QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -49,9 +49,10 @@ from PySide6.QtWidgets import (
 )
 
 from app.core.audio_engine import AudioEngine, PlayState
-from app.core.music_scanner import MusicScanner
+from app.core.music_scanner import MusicScanner, SUPPORTED_EXTENSIONS
 from app.core.playlist_manager import PlaylistManager
 from app.models.song import PlayMode, Song
+from app.services.audio_metadata import extract_cover_art, extract_song_metadata
 from app.ui.lyrics_window import LrcParser, LyricsWindow
 from app.ui.widgets.playlist_widget import PlaylistWidget
 from app.ui.widgets.search_panel import SearchPanel
@@ -61,24 +62,6 @@ from app.services.music_provider import MusicProvider
 import app.services.config as cfg
 
 logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Helper: extract a tag from a mutagen metadata object
-# ---------------------------------------------------------------------------
-
-def _try_tag(metadata, *names: str) -> str:
-    """Return the first non-empty tag found among *names* in *metadata*."""
-    for name in names:
-        if not hasattr(metadata, "get"):
-            continue
-        val = metadata.get(name)
-        if val:
-            # mutagen returns a list of strings for most frames.
-            if isinstance(val, list):
-                return str(val[0])
-            return str(val)
-    return ""
 
 
 class MainWindow(QMainWindow):
@@ -118,6 +101,12 @@ class MainWindow(QMainWindow):
         #    the playlist on scan_finished rather than reloading from DB).
         self._scanned_songs: list[Song] = []
         self._last_scanned_dir: str = ""
+        self._scan_append_mode: bool = False
+        self._pending_scan_requests: list[tuple[str, bool]] = []
+        self._last_position_ms: int = 0
+        self._pending_restore_session: dict[str, object] = {}
+        self._session_restore_applied: bool = False
+        self._preserve_stopped_position: bool = False
 
         # ---- Build UI ----
         self._setup_window()
@@ -166,6 +155,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(self.WINDOW_TITLE)
         self.setMinimumSize(self.MIN_WIDTH, self.MIN_HEIGHT)
         self.resize(self.DEFAULT_WIDTH, self.DEFAULT_HEIGHT)
+        self.setAcceptDrops(True)
 
     # ---------------------------------------------------------------
     # Menu bar
@@ -305,6 +295,21 @@ class MainWindow(QMainWindow):
         # -- Row 0: Song info + Progress slider --
         progress_row = QHBoxLayout()
         progress_row.setSpacing(8)
+
+        self._cover_label = QLabel("♪")
+        self._cover_label.setAlignment(Qt.AlignCenter)
+        self._cover_label.setFixedSize(64, 64)
+        self._cover_label.setStyleSheet("""
+            QLabel {
+                background-color: #313244;
+                border: 1px solid #45475a;
+                border-radius: 6px;
+                color: #cdd6f4;
+                font-size: 22px;
+                font-weight: 700;
+            }
+        """)
+        progress_row.addWidget(self._cover_label)
 
         # Song info
         self._song_info_label = QLabel("未播放")
@@ -476,6 +481,13 @@ class MainWindow(QMainWindow):
         """Refresh the playlist widget when the playlist is loaded."""
         songs = self._playlist_manager.playlist
         self._playlist_widget.load_songs(songs)
+        self._pending_restore_session = self._normalize_session_state(
+            self._playlist_manager.session_state
+        )
+        self._playlist_manager.clear_session_state()
+        self._session_restore_applied = False
+        if not songs:
+            self._reset_cover_art()
         self._update_song_info(None)
 
     @Slot(int)
@@ -495,11 +507,20 @@ class MainWindow(QMainWindow):
         """The current song changed – update UI and load into audio engine."""
         if song is not None and song.file_path:
             logger.info("Playing: %s - %s", song.artist, song.title)
-            self._audio_engine.play(song.file_path)
+            self._update_cover_art(song)
             self._load_lyrics_for(song)
+            if self._should_restore_stopped_session(song):
+                self._apply_stopped_session(song)
+            elif self._should_restore_paused_session(song):
+                self._apply_paused_session(song)
+            else:
+                self._preserve_stopped_position = False
+                self._audio_engine.play(song.file_path)
         else:
             # Song removed / playlist cleared → stop playback.
+            self._preserve_stopped_position = False
             self._audio_engine.stop()
+            self._reset_cover_art()
 
         self._update_song_info(song)
 
@@ -560,6 +581,7 @@ class MainWindow(QMainWindow):
     @Slot(int)
     def _on_position_changed(self, position_ms: int) -> None:
         """Update progress slider and time label."""
+        self._last_position_ms = position_ms
         if not self._slider_dragging:
             self._progress_slider.setValue(position_ms)
         self._time_current.setText(self._format_time(position_ms))
@@ -573,6 +595,7 @@ class MainWindow(QMainWindow):
         """Update slider range and total time label."""
         self._progress_slider.setRange(0, max(1, duration_ms))
         self._time_total.setText(self._format_time(duration_ms))
+        self._apply_pending_restore(duration_ms)
 
     @Slot(int)
     def _on_state_changed(self, state_int: int) -> None:
@@ -584,8 +607,10 @@ class MainWindow(QMainWindow):
             self._play_btn.setText("▶")
         else:  # STOPPED
             self._play_btn.setText("▶")
-            self._progress_slider.setValue(0)
-            self._time_current.setText("0:00")
+            if not self._should_preserve_stopped_position():
+                self._progress_slider.setValue(0)
+                self._time_current.setText("0:00")
+                self._last_position_ms = 0
         self._update_tray_play_pause()
 
     @Slot(str)
@@ -606,25 +631,36 @@ class MainWindow(QMainWindow):
     @Slot()
     def _on_play_pause(self) -> None:
         """Toggle between play and pause."""
+        resume_from_restored_stop = (
+            self._preserve_stopped_position and self._progress_slider.value() > 0
+        )
         state = self._audio_engine.state
         if state == PlayState.PLAYING:
+            self._preserve_stopped_position = False
             self._audio_engine.pause()
         elif state == PlayState.PAUSED:
+            self._preserve_stopped_position = False
             self._audio_engine.resume()
         else:
             # Stopped – play from the current playlist selection.
             song = self._playlist_manager.get_current_song()
             if song is not None:
                 self._audio_engine.play(song.file_path)
+                if resume_from_restored_stop:
+                    position_ms = self._progress_slider.value()
+                    QTimer.singleShot(0, lambda pos=position_ms: self._audio_engine.seek(pos))
+                self._preserve_stopped_position = False
             else:
                 # Try to start from the first song.
                 songs = self._playlist_manager.playlist
                 if songs:
+                    self._preserve_stopped_position = False
                     self._playlist_manager.go_to(0)
 
     @Slot()
     def _on_stop(self) -> None:
         """Stop playback."""
+        self._preserve_stopped_position = False
         self._audio_engine.stop()
 
     @Slot()
@@ -657,6 +693,7 @@ class MainWindow(QMainWindow):
         # playlist-stop in SEQUENTIAL mode.
         if pos > 0 and max_pos > 2000 and pos >= max_pos - 1000:
             pos = max_pos - 1000
+        self._last_position_ms = pos
         self._audio_engine.seek(pos)
 
     @Slot(int)
@@ -711,7 +748,7 @@ class MainWindow(QMainWindow):
             self, "选择音乐目录", QDir.homePath(),
         )
         if directory:
-            self._music_scanner.scan_directory(directory)
+            self._queue_scan_directory(directory, append=False)
 
     @Slot()
     def _on_open_files(self) -> None:
@@ -720,21 +757,7 @@ class MainWindow(QMainWindow):
             self, "选择音频文件", QDir.homePath(),
             "音频文件 (*.mp3 *.flac *.wav *.ogg *.m4a *.wma *.aac *.au *.opus);;所有文件 (*)",
         )
-        if not files:
-            return
-        songs: list[Song] = []
-        for file_path in files:
-            try:
-                song = self._metadata_from_path(file_path)
-                if song is not None:
-                    songs.append(song)
-            except Exception:
-                continue
-        if songs:
-            # Append to the current playlist.
-            for s in songs:
-                self._playlist_manager.add_song(s)
-            self._status_label.setText(f"已添加 {len(songs)} 首歌曲.")
+        self._import_local_files(files)
 
     @Slot()
     def _on_import_playlist(self) -> None:
@@ -813,50 +836,15 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _metadata_from_path(file_path: str) -> Optional[Song]:
-        """Extract metadata from *file_path* using mutagen and return a Song."""
-        import mutagen
-        song = Song(file_path=file_path)
-        try:
-            audio = mutagen.File(file_path)
-            if audio is None:
-                # Fall back to filename.
-                song.title = Path(file_path).stem
-                return song
-
-            title = None
-            if hasattr(audio, "tags") and audio.tags:
-                title = _try_tag(audio.tags, "title", "TIT2")
-            if not title:
-                title = Path(file_path).stem
-            song.title = title
-
-            artist = _try_tag(audio, "artist", "TPE1") if hasattr(audio, "tags") and audio.tags else ""
-            song.artist = artist or ""
-
-            album = _try_tag(audio, "album", "TALB") if hasattr(audio, "tags") and audio.tags else ""
-            song.album = album or ""
-
-            if hasattr(audio.info, "length"):
-                song.duration = float(audio.info.length)
-
-            ext = Path(file_path).suffix.lower()
-            song.file_format = ext.lstrip(".")
-
-            import hashlib
-            try:
-                h = hashlib.sha256()
-                with open(file_path, "rb") as f:
-                    while True:
-                        chunk = f.read(65536)
-                        if not chunk:
-                            break
-                        h.update(chunk)
-                song.file_hash = h.hexdigest()
-            except Exception:
-                pass
-        except Exception:
-            song.title = Path(file_path).stem
-        return song
+        """Extract metadata from *file_path* and return a Song."""
+        song = extract_song_metadata(file_path)
+        if song is not None:
+            return song
+        return Song(
+            title=Path(file_path).stem,
+            file_path=file_path,
+            file_format=Path(file_path).suffix.lower().lstrip("."),
+        )
 
     @Slot(bool)
     def _on_toggle_lyrics(self, visible: bool) -> None:
@@ -896,10 +884,9 @@ class MainWindow(QMainWindow):
 
     @Slot(int)
     def _on_scan_finished(self, imported: int) -> None:
-        """Scan complete – replace the playlist with scanned songs."""
+        """Scan complete – load the scanned songs into the playlist."""
         self._scan_progress.hide()
 
-        from app.models.database import DatabaseManager
         db = getattr(self._music_scanner, "_db", None)
 
         # Collect songs: newly imported + existing in DB under the scanned dir.
@@ -914,12 +901,16 @@ class MainWindow(QMainWindow):
                     seen_paths.add(s.file_path)
 
         if songs:
-            self._playlist_manager.load_playlist(songs)
-            self._status_label.setText(
-                f"扫描完成 – 已加载 {len(songs)} 首歌曲."
-            )
+            if self._scan_append_mode:
+                added = self._append_unique_songs(songs)
+                self._status_label.setText(f"扫描完成 – 已追加 {added} 首歌曲.")
+            else:
+                self._playlist_manager.load_playlist(songs)
+                self._status_label.setText(f"扫描完成 – 已加载 {len(songs)} 首歌曲.")
         else:
             self._status_label.setText("扫描完成 – 没有发现歌曲.")
+
+        self._start_next_scan_request()
 
     @Slot(str)
     def _on_scan_error(self, message: str) -> None:
@@ -1060,6 +1051,33 @@ class MainWindow(QMainWindow):
         if reason == QSystemTrayIcon.DoubleClick:
             self._on_play_pause()
 
+    def dragEnterEvent(self, event) -> None:
+        """Accept local audio-file and directory drops anywhere in the window."""
+        files, directories = self._extract_drop_paths(event.mimeData())
+        if files or directories:
+            event.acceptProposedAction()
+            return
+        super().dragEnterEvent(event)
+
+    def dropEvent(self, event) -> None:
+        """Import dropped audio files and queue dropped directories for scanning."""
+        files, directories = self._extract_drop_paths(event.mimeData())
+        handled = False
+
+        if files:
+            self._import_local_files(files)
+            handled = True
+
+        if directories:
+            for directory in directories:
+                self._queue_scan_directory(directory, append=True)
+            handled = True
+
+        if handled:
+            event.acceptProposedAction()
+            return
+        super().dropEvent(event)
+
     # ================================================================
     # Internal helpers
     # ================================================================
@@ -1076,6 +1094,230 @@ class MainWindow(QMainWindow):
         mode = self._playlist_manager.play_mode
         symbol = self._PLAY_MODE_SYMBOLS.get(mode, "▶")
         self._mode_btn.setText(symbol)
+
+    def _import_local_files(self, file_paths: list[str]) -> None:
+        """Add supported local audio files to the current playlist."""
+        if not file_paths:
+            return
+
+        songs: list[Song] = []
+        failed = 0
+        for file_path in file_paths:
+            if not self._is_supported_audio_file(file_path):
+                continue
+            try:
+                song = self._metadata_from_path(file_path)
+                if song is not None:
+                    songs.append(song)
+            except Exception as exc:
+                failed += 1
+                logger.warning("Failed to import %s: %s", file_path, exc)
+
+        if songs:
+            for song in songs:
+                self._playlist_manager.add_song(song)
+            message = f"已添加 {len(songs)} 首歌曲."
+            if failed:
+                message += f" 另有 {failed} 首导入失败."
+            self._status_label.setText(message)
+        elif failed:
+            self._status_label.setText(f"未能导入文件，共有 {failed} 个文件失败.")
+
+    def _queue_scan_directory(self, directory: str, append: bool) -> None:
+        """Start a directory scan now or append it to the scan queue."""
+        normalized = str(Path(directory))
+        if self._music_scanner.isRunning():
+            self._pending_scan_requests.append((normalized, append))
+            self._status_label.setText(f"已加入扫描队列: {Path(directory).name}")
+            return
+
+        self._scan_append_mode = append
+        self._music_scanner.scan_directory(normalized)
+
+    def _start_next_scan_request(self) -> None:
+        """Continue with the next queued directory scan, if any."""
+        if not self._pending_scan_requests:
+            return
+
+        directory, append = self._pending_scan_requests.pop(0)
+        self._scan_append_mode = append
+        self._music_scanner.scan_directory(directory)
+
+    def _append_unique_songs(self, songs: list[Song]) -> int:
+        """Append songs whose file paths are not already in the active playlist."""
+        existing_paths = {song.file_path for song in self._playlist_manager.playlist}
+        added = 0
+        for song in songs:
+            if song.file_path in existing_paths:
+                continue
+            self._playlist_manager.add_song(song)
+            existing_paths.add(song.file_path)
+            added += 1
+        return added
+
+    def _extract_drop_paths(self, mime_data) -> tuple[list[str], list[str]]:
+        """Split dropped local URLs into supported files and directories."""
+        files: list[str] = []
+        directories: list[str] = []
+        if not mime_data or not mime_data.hasUrls():
+            return files, directories
+
+        for url in mime_data.urls():
+            if not url.isLocalFile():
+                continue
+            path = Path(url.toLocalFile())
+            if path.is_dir():
+                directories.append(str(path))
+            elif path.is_file() and self._is_supported_audio_file(str(path)):
+                files.append(str(path))
+
+        return files, directories
+
+    @staticmethod
+    def _is_supported_audio_file(file_path: str) -> bool:
+        """Return whether *file_path* looks like a supported local audio file."""
+        return Path(file_path).suffix.lower() in SUPPORTED_EXTENSIONS
+
+    def _update_cover_art(self, song: Song) -> None:
+        """Display the current song's embedded cover art when available."""
+        art_bytes = extract_cover_art(song.file_path)
+        if art_bytes:
+            pixmap = QPixmap()
+            if pixmap.loadFromData(art_bytes):
+                self._cover_label.setPixmap(
+                    pixmap.scaled(
+                        self._cover_label.size(),
+                        Qt.KeepAspectRatioByExpanding,
+                        Qt.SmoothTransformation,
+                    )
+                )
+                self._cover_label.setText("")
+                return
+        self._reset_cover_art()
+
+    def _reset_cover_art(self) -> None:
+        """Restore the default cover-art placeholder."""
+        self._cover_label.clear()
+        self._cover_label.setText("♪")
+
+    def _normalize_session_state(self, state: dict[str, object]) -> dict[str, object]:
+        """Coerce persisted session metadata into a predictable shape."""
+        if not state:
+            return {}
+
+        file_path = str(state.get("current_file_path") or "")
+        if not file_path:
+            return {}
+
+        position_ms = state.get("position_ms", 0)
+        play_state = state.get("play_state", int(PlayState.STOPPED))
+        try:
+            position_ms = max(0, int(position_ms))
+        except (TypeError, ValueError):
+            position_ms = 0
+        try:
+            play_state = int(play_state)
+        except (TypeError, ValueError):
+            play_state = int(PlayState.STOPPED)
+
+        return {
+            "current_file_path": file_path,
+            "position_ms": position_ms,
+            "play_state": play_state,
+        }
+
+    def _should_restore_stopped_session(self, song: Song) -> bool:
+        """Return whether this song should restore into a stopped position."""
+        if self._session_restore_applied or not self._pending_restore_session:
+            return False
+        return (
+            self._pending_restore_session.get("current_file_path") == song.file_path
+            and self._pending_restore_session.get("play_state") == int(PlayState.STOPPED)
+        )
+
+    def _apply_stopped_session(self, song: Song) -> None:
+        """Restore slider/time state without auto-starting playback."""
+        duration_ms = max(0, int(song.duration * 1000))
+        position_ms = self._clamp_restore_position(duration_ms)
+        self._progress_slider.setRange(0, max(1, duration_ms))
+        self._progress_slider.setValue(position_ms)
+        self._time_current.setText(self._format_time(position_ms))
+        self._time_total.setText(self._format_time(duration_ms))
+        self._last_position_ms = position_ms
+        self._preserve_stopped_position = True
+        self._session_restore_applied = True
+        self._pending_restore_session = {}
+        if self._lyrics_window.isVisible():
+            self._lyrics_window.sync_position(position_ms)
+        self._status_label.setText("已恢复上次播放进度")
+
+    def _apply_pending_restore(self, duration_ms: int) -> None:
+        """Seek after startup when restoring a saved playing session."""
+        if self._session_restore_applied or not self._pending_restore_session:
+            return
+
+        current_song = self._playlist_manager.get_current_song()
+        if current_song is None:
+            return
+        if self._pending_restore_session.get("current_file_path") != current_song.file_path:
+            self._pending_restore_session = {}
+            return
+
+        position_ms = self._clamp_restore_position(duration_ms)
+        play_state = int(self._pending_restore_session.get("play_state", int(PlayState.STOPPED)))
+        if play_state != int(PlayState.PLAYING):
+            return
+
+        if position_ms > 0:
+            self._progress_slider.setValue(position_ms)
+            self._time_current.setText(self._format_time(position_ms))
+            self._last_position_ms = position_ms
+            QTimer.singleShot(0, lambda pos=position_ms: self._audio_engine.seek(pos))
+
+        self._preserve_stopped_position = False
+        self._session_restore_applied = True
+        self._pending_restore_session = {}
+        self._status_label.setText("已恢复上次播放状态")
+
+    def _clamp_restore_position(self, duration_ms: int) -> int:
+        """Clamp the saved position to the currently known track duration."""
+        try:
+            position_ms = int(self._pending_restore_session.get("position_ms", 0))
+        except (TypeError, ValueError):
+            return 0
+
+        if duration_ms <= 0:
+            return max(0, position_ms)
+        upper_bound = duration_ms - 1000 if duration_ms > 2000 else duration_ms
+        return max(0, min(position_ms, upper_bound))
+
+    def _should_preserve_stopped_position(self) -> bool:
+        """Keep the restored slider position visible after startup stop-state restore."""
+        return self._preserve_stopped_position
+
+    def _should_restore_paused_session(self, song: Song) -> bool:
+        """Return whether startup should restore this song without its old progress."""
+        if self._session_restore_applied or not self._pending_restore_session:
+            return False
+        return (
+            self._pending_restore_session.get("current_file_path") == song.file_path
+            and self._pending_restore_session.get("play_state") == int(PlayState.PAUSED)
+        )
+
+    def _apply_paused_session(self, song: Song) -> None:
+        """Restore only the selected song for a previously paused session."""
+        duration_ms = max(0, int(song.duration * 1000))
+        self._progress_slider.setRange(0, max(1, duration_ms))
+        self._progress_slider.setValue(0)
+        self._time_current.setText("0:00")
+        self._time_total.setText(self._format_time(duration_ms))
+        self._last_position_ms = 0
+        self._preserve_stopped_position = False
+        self._session_restore_applied = True
+        self._pending_restore_session = {}
+        if self._lyrics_window.isVisible():
+            self._lyrics_window.sync_position(0)
+        self._status_label.setText("已恢复上次播放歌曲")
 
     def _update_song_info(self, song: Optional[Song]) -> None:
         """Update the song info label in the playback bar."""
@@ -1121,12 +1363,33 @@ class MainWindow(QMainWindow):
             # same base name.
             self._lyrics_window.load_lyrics([])
 
+    def _build_session_state(self) -> dict[str, object]:
+        """Collect the current playback session for persistence on exit."""
+        current_song = self._playlist_manager.get_current_song()
+        if current_song is None:
+            return {
+                "current_file_path": "",
+                "position_ms": 0,
+                "play_state": int(PlayState.STOPPED),
+            }
+
+        position_ms = self._progress_slider.value()
+        if position_ms <= 0:
+            position_ms = self._last_position_ms
+
+        return {
+            "current_file_path": current_song.file_path,
+            "position_ms": max(0, int(position_ms)),
+            "play_state": int(self._audio_engine.state),
+        }
+
     # ================================================================
     # Cleanup
     # ================================================================
 
     def closeEvent(self, event) -> None:
         """Save playlist state and clean up on window close."""
+        self._playlist_manager.set_session_state(self._build_session_state())
         self._playlist_manager.save_to_m3u()
 
         self._audio_engine.stop()

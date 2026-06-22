@@ -7,7 +7,6 @@ Runs in a background QThread so the UI stays responsive during a full scan.
 
 from __future__ import annotations
 
-import hashlib
 import logging
 import os
 from pathlib import Path
@@ -15,10 +14,9 @@ from typing import List, Optional, Set
 
 from PySide6.QtCore import QMutex, QMutexLocker, QObject, QThread, Signal
 
-import mutagen
-
 from app.models.database import DatabaseManager
 from app.models.song import Song
+from app.services.audio_metadata import compute_hash, extract_song_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -31,10 +29,6 @@ SUPPORTED_EXTENSIONS: Set[str] = {
     ".mp3", ".flac", ".wav", ".ogg", ".m4a", ".m4b",
     ".wma", ".aac", ".au", ".aiff", ".aif", ".opus",
 }
-
-# How many bytes to read at a time when hashing.
-_HASH_BLOCK_SIZE = 64 * 1024  # 64 KB
-
 
 # ===================================================================
 # MusicScanner – background scanner
@@ -167,78 +161,13 @@ def extract_metadata(file_path: str) -> Optional[Song]:
     Returns a :class:`Song` instance, or ``None`` if the file cannot
     be parsed.
     """
-    try:
-        audio = mutagen.File(file_path)
-        if audio is None:
-            return None
-    except Exception:
-        return None
-
-    # --- tags ---
-    # mutagen.File returns a dict-like object.  We try convenience names
-    # first, then fall back to raw ID3 frame names.
-    title: str = _tag_str(audio, "title")
-    if not title:
-        title = _tag_str(audio, "TIT2")
-    if not title:
-        # Fall back to file name (without extension).
-        title = Path(file_path).stem
-
-    artist: str = _tag_str(audio, "artist")
-    if not artist:
-        artist = _tag_str(audio, "TPE1")
-
-    album: str = _tag_str(audio, "album")
-    if not album:
-        album = _tag_str(audio, "TALB")
-
-    # --- duration ---
-    duration: float = 0.0
-    if hasattr(audio.info, "length"):
-        duration = float(audio.info.length)
-
-    # --- format ---
-    file_format = Path(file_path).suffix.lower().lstrip(".")
-
-    # --- hash ---
-    file_hash = _compute_hash(file_path)
-
-    return Song(
-        title=title or Path(file_path).stem,
-        artist=artist or "",
-        album=album or "",
-        duration=duration,
-        file_path=file_path,
-        file_format=file_format,
-        file_hash=file_hash,
-    )
+    return extract_song_metadata(file_path)
 
 
 # ===================================================================
 # Module-level helpers
 # ===================================================================
 
-def _tag_str(audio: mutagen.FileType, key: str,
-             default: str = "") -> str:
-    """Return the first string value for *key* from *audio*, or *default*."""
-    try:
-        val = audio.get(key)
-        if val is None:
-            return default
-        if isinstance(val, list):
-            return str(val[0]) if val else default
-        return str(val)
-    except Exception:
-        return default
-
-
 def _compute_hash(file_path: str) -> str:
     """SHA-256 hex digest of the file contents."""
-    sha = hashlib.sha256()
-    with open(file_path, "rb") as f:
-        while True:
-            block = f.read(_HASH_BLOCK_SIZE)
-            if not block:
-                break
-            sha.update(block)
-    return sha.hexdigest()
+    return compute_hash(file_path)

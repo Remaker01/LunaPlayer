@@ -7,12 +7,21 @@ tests to work; the *test_base* module handles this automatically.
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 
 from app.core.playlist_manager import PlaylistManager
-from app.models.song import PlayMode
+from app.models.song import PlayMode, Song
 
-from tests.test_base import SAMPLE_SONGS, SignalCapture, ensure_qapp
+from tests.test_base import (
+    SAMPLE_SONGS,
+    SignalCapture,
+    create_temp_db,
+    destroy_temp_db,
+    ensure_qapp,
+)
 
 
 class PlaylistManagerTestCase(unittest.TestCase):
@@ -278,3 +287,49 @@ class TestSignals(PlaylistManagerTestCase):
         with SignalCapture(self.manager.play_mode_changed) as sig:
             self.manager.set_play_mode(PlayMode.SEQUENTIAL)
         self.assertEqual(len(sig), 0)
+
+
+class TestPlaylistPersistence(PlaylistManagerTestCase):
+    def test_save_and_restore_session_state(self) -> None:
+        db = create_temp_db()
+        try:
+            with TemporaryDirectory(prefix="smallplayer_home_") as tmp_home:
+                with patch("pathlib.Path.home", return_value=Path(tmp_home)):
+                    custom_songs: list[Song] = []
+                    music_dir = Path(tmp_home) / "music"
+                    music_dir.mkdir(parents=True, exist_ok=True)
+                    for idx, song in enumerate(SAMPLE_SONGS):
+                        custom_song = Song(
+                            title=song.title,
+                            artist=song.artist,
+                            album=song.album,
+                            duration=song.duration,
+                            file_path=str((music_dir / f"track_{idx}.{song.file_format}").resolve()),
+                            file_format=song.file_format,
+                            file_hash=song.file_hash,
+                        )
+                        custom_songs.append(custom_song)
+                        db.add_song(custom_song)
+
+                    self.manager.load_playlist(custom_songs, start_index=2)
+                    self.manager.set_play_mode(PlayMode.LOOP)
+                    self.manager.set_session_state({
+                        "current_file_path": custom_songs[2].file_path,
+                        "position_ms": 91234,
+                        "play_state": 2,
+                    })
+                    saved_path = self.manager.save_to_m3u()
+                    self.assertTrue(saved_path.endswith("current.m3u8"))
+
+                    restored = PlaylistManager()
+                    self.assertTrue(restored.load_from_m3u(db))
+                    self.assertEqual(restored.current_index, 2)
+                    self.assertEqual(restored.play_mode, PlayMode.LOOP)
+                    self.assertEqual(
+                        restored.session_state["current_file_path"],
+                        custom_songs[2].file_path,
+                    )
+                    self.assertEqual(restored.session_state["position_ms"], 91234)
+                    self.assertEqual(restored.session_state["play_state"], 2)
+        finally:
+            destroy_temp_db(db)

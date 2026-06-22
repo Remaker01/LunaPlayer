@@ -66,6 +66,7 @@ class PlaylistManager(QObject):
         self._playlist: List[Song] = []
         self._current_index: int = -1  # -1 means "nothing selected"
         self._play_mode: PlayMode = PlayMode.SEQUENTIAL
+        self._session_state: dict[str, object] = {}
 
     # ------------------------------------------------------------------
     # Properties
@@ -83,6 +84,11 @@ class PlaylistManager(QObject):
     @property
     def play_mode(self) -> PlayMode:
         return self._play_mode
+
+    @property
+    def session_state(self) -> dict[str, object]:
+        """Return a copy of the saved playback session metadata."""
+        return dict(self._session_state)
 
     # ------------------------------------------------------------------
     # Playlist mutation
@@ -227,6 +233,14 @@ class PlaylistManager(QObject):
         self.set_play_mode(new_mode)
         return new_mode
 
+    def set_session_state(self, state: dict[str, object]) -> None:
+        """Store non-playlist playback state to be persisted with the queue."""
+        self._session_state = dict(state)
+
+    def clear_session_state(self) -> None:
+        """Discard any previously loaded or pending playback session state."""
+        self._session_state = {}
+
     # ------------------------------------------------------------------
     # M3U persistence (class methods)
     # ------------------------------------------------------------------
@@ -259,10 +273,12 @@ class PlaylistManager(QObject):
 
         try:
             with open(meta_path, "w", encoding="utf-8") as f:
-                json.dump({
+                meta = {
                     "current_index": self._current_index,
                     "play_mode": int(self._play_mode),
-                }, f, ensure_ascii=False)
+                }
+                meta.update(self._session_state)
+                json.dump(meta, f, ensure_ascii=False)
         except OSError as exc:
             logger.warning("Failed to save playlist meta: %s", exc)
 
@@ -317,16 +333,23 @@ class PlaylistManager(QObject):
 
         index = 0
         mode_val = 0
+        session_state: dict[str, object] = {}
         try:
             with open(meta_path, "r", encoding="utf-8") as f:
                 meta = json.load(f)
             index = meta.get("current_index", 0)
             mode_val = meta.get("play_mode", 0)
+            session_state = {
+                "play_state": meta.get("play_state", 0),
+                "position_ms": meta.get("position_ms", 0),
+                "current_file_path": meta.get("current_file_path", ""),
+            }
             if not (0 <= index < len(songs)):
                 index = 0
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             pass
 
+        self._session_state = session_state
         self.load_playlist(songs, index)
         try:
             self.set_play_mode(PlayMode(mode_val))
