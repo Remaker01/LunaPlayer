@@ -54,10 +54,7 @@ from app.core.playlist_manager import PlaylistManager
 from app.models.song import PlayMode, Song
 from app.services.audio_metadata import extract_cover_art, extract_song_metadata
 from app.ui.lyrics_window import LrcParser, LyricsWindow
-from app.ui.widgets.playlist_widget import PlaylistWidget
-from app.ui.widgets.search_panel import SearchPanel
-from app.ui.widgets.song_info_dialog import SongInfoDialog
-from app.ui.widgets.settings_dialog import SettingsDialog, Settings
+from app.ui.widgets import PlaylistWidget, SearchPanel, SongInfoDialog, SettingsDialog
 from app.services.music_provider import MusicProvider
 import app.services.config as cfg
 
@@ -559,15 +556,8 @@ class MainWindow(QMainWindow):
 
     @Slot(list)
     def _on_order_changed(self, songs: list[Song]) -> None:
-        """Drag-and-drop reorder: reload the playlist with the new order."""
-        # Keep the same current index if possible.
-        current_song = self._playlist_manager.get_current_song()
-        new_index = 0
-        for i, s in enumerate(songs):
-            if current_song and s.file_path == current_song.file_path:
-                new_index = i
-                break
-        self._playlist_manager.load_playlist(songs, new_index)
+        """Drag-and-drop reorder: update queue ordering without restarting playback."""
+        self._playlist_manager.reorder_playlist(songs)
 
     @Slot(int)
     def _on_info_requested(self, index: int) -> None:

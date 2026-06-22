@@ -109,6 +109,30 @@ class PlaylistManager(QObject):
         self.song_added.emit(index)
         return index
 
+    def reorder_playlist(self, songs: List[Song]) -> None:
+        """Replace playlist ordering without restarting the current song."""
+        current_song = self._current_song_or_none()
+        current_path = current_song.file_path if current_song is not None else ""
+
+        self._playlist = list(songs)
+        if current_path:
+            self._current_index = next(
+                (i for i, song in enumerate(self._playlist) if song.file_path == current_path),
+                -1,
+            )
+        elif not self._playlist:
+            self._current_index = -1
+        elif not (0 <= self._current_index < len(self._playlist)):
+            self._current_index = -1
+
+        self.playlist_loaded.emit()
+        self.current_index_changed.emit(self._current_index)
+
+        new_current = self._current_song_or_none()
+        new_path = new_current.file_path if new_current is not None else ""
+        if new_path != current_path:
+            self.current_song_changed.emit(new_current)
+
     def remove_song(self, index: int) -> Optional[Song]:
         """Remove the song at *index* and return it, or ``None`` if out of range.
 

@@ -215,6 +215,7 @@ class PlaylistWidget(QWidget):
 
         # --- Model ---
         self._model = PlaylistModel(self)
+        self._model.order_changed.connect(self._emit_order_changed)
 
         # --- View ---
         self._view = QListView()
@@ -325,3 +326,7 @@ class PlaylistWidget(QWidget):
     def _request_remove(self, row: int) -> None:
         """Emit remove_requested after internal model removal."""
         self.remove_requested.emit(row)
+
+    def _emit_order_changed(self) -> None:
+        """Forward the model's current ordering to external consumers."""
+        self.order_changed.emit(self._model.songs())

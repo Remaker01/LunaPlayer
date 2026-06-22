@@ -144,6 +144,27 @@ class TestPlaylistMutation(PlaylistManagerTestCase):
         self.assertEqual(len(loaded_sig), 1)
         self.assertEqual(song_sig[0], (None,))
 
+    def test_reorder_playlist_updates_order_without_restarting_current_song(self) -> None:
+        self.loaded.go_to(1)
+        reordered = [SAMPLE_SONGS[0], SAMPLE_SONGS[2], SAMPLE_SONGS[1], SAMPLE_SONGS[3]]
+
+        with SignalCapture(self.loaded.current_song_changed) as song_sig:
+            self.loaded.reorder_playlist(reordered)
+
+        self.assertEqual(self.loaded.current_index, 2)
+        self.assertEqual(self.loaded.get_current_song(), SAMPLE_SONGS[1])
+        self.assertEqual(len(song_sig), 0)
+
+    def test_reorder_playlist_changes_next_track_to_new_order(self) -> None:
+        self.loaded.go_to(1)
+        reordered = [SAMPLE_SONGS[0], SAMPLE_SONGS[2], SAMPLE_SONGS[1], SAMPLE_SONGS[3]]
+        self.loaded.reorder_playlist(reordered)
+
+        next_song = self.loaded.next()
+
+        self.assertEqual(next_song, SAMPLE_SONGS[3])
+        self.assertEqual(self.loaded.current_index, 3)
+
 
 # ======================================================================
 # Navigation – Sequential
