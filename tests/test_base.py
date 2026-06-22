@@ -2,42 +2,47 @@
 
 from __future__ import annotations
 
-import tempfile
+import math
+import struct
+import wave
 from pathlib import Path
 from typing import List
 
 from PySide6.QtCore import QCoreApplication
+from PySide6.QtWidgets import QApplication
 
-from app.models.database import DatabaseManager
 from app.models.song import Song
 
 
 def ensure_qapp() -> QCoreApplication:
-    """Return an existing QCoreApplication or create one."""
+    """Return an existing QApplication or create one."""
     app = QCoreApplication.instance()
     if app is None:
-        app = QCoreApplication([])
+        app = QApplication([])
     return app
 
 
-def create_temp_db() -> DatabaseManager:
-    """Create a DatabaseManager backed by a temporary SQLite file.
+def create_test_wav(
+    directory: str | Path,
+    name: str,
+    duration_sec: float = 0.3,
+    frequency: float = 440.0,
+    sample_rate: int = 44100,
+) -> str:
+    """Create a short stereo WAV file for tests and return its path."""
+    n = int(sample_rate * duration_sec)
+    samples = bytearray()
+    for i in range(n):
+        val = int(math.sin(2 * math.pi * frequency * i / sample_rate) * 32767 * 0.3)
+        samples += struct.pack("<hh", val, val)
 
-    The caller is responsible for calling ``mgr.close()`` and deleting
-    the file when done.
-    """
-    tmp = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
-    tmp.close()
-    mgr = DatabaseManager(tmp.name)
-    mgr.connect(check_same_thread=False)
-    return mgr
-
-
-def destroy_temp_db(mgr: DatabaseManager) -> None:
-    """Close and delete the database created by :func:`create_temp_db`."""
-    db_path = mgr._db_path  # type: ignore[attr-defined]
-    mgr.close()
-    Path(db_path).unlink(missing_ok=True)
+    path = Path(directory) / name
+    with wave.open(str(path), "wb") as wav_file:
+        wav_file.setnchannels(2)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        wav_file.writeframes(bytes(samples))
+    return str(path)
 
 
 SAMPLE_SONGS: List[Song] = [

@@ -17,14 +17,15 @@ _HASH_BLOCK_SIZE = 64 * 1024  # 64 KB
 
 def extract_song_metadata(file_path: str) -> Optional[Song]:
     """Extract tags, duration, format, and content hash for a local audio file."""
+    resolved_path = str(Path(file_path).resolve())
     try:
-        audio = mutagen.File(file_path)
+        audio = mutagen.File(resolved_path)
         if audio is None:
             return None
     except Exception:
         return None
 
-    title = _tag_str(audio, "title") or _tag_str(audio, "TIT2") or Path(file_path).stem
+    title = _tag_str(audio, "title") or _tag_str(audio, "TIT2") or Path(resolved_path).stem
     artist = _tag_str(audio, "artist") or _tag_str(audio, "TPE1")
     album = _tag_str(audio, "album") or _tag_str(audio, "TALB")
 
@@ -37,9 +38,9 @@ def extract_song_metadata(file_path: str) -> Optional[Song]:
         artist=artist or "",
         album=album or "",
         duration=duration,
-        file_path=file_path,
-        file_format=Path(file_path).suffix.lower().lstrip("."),
-        file_hash=compute_hash(file_path),
+        file_path=resolved_path,
+        file_format=Path(resolved_path).suffix.lower().lstrip("."),
+        file_hash=compute_hash(resolved_path),
     )
 
 

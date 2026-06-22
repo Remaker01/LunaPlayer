@@ -284,8 +284,7 @@ class PlaylistManager(QObject):
 
         return str(m3u_path)
 
-    def load_from_m3u(self, db: "DatabaseManager",  # noqa: F821
-                      name: str = CURRENT_PLAYLIST_NAME) -> bool:
+    def load_from_m3u(self, name: str = CURRENT_PLAYLIST_NAME) -> bool:
         """Load a playlist from an M3U8 file in the playlists directory.
 
         Returns ``True`` if at least one song was loaded.
@@ -307,6 +306,22 @@ class PlaylistManager(QObject):
         except OSError:
             return False
 
+        session_state: dict[str, object] = {}
+        meta_index = 0
+        mode_val = 0
+        try:
+            with open(meta_path, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            meta_index = meta.get("current_index", 0)
+            mode_val = meta.get("play_mode", 0)
+            session_state = {
+                "play_state": meta.get("play_state", 0),
+                "position_ms": meta.get("position_ms", 0),
+                "current_file_path": meta.get("current_file_path", ""),
+            }
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            pass
+
         for line in lines:
             line = line.strip()
             if not line or line.startswith("#"):
@@ -316,9 +331,8 @@ class PlaylistManager(QObject):
                 path = m3u_path.parent / line
             resolved = str(path.resolve())
 
-            song = db.get_song_by_path(resolved) if db.is_connected else None
-            if song is not None:
-                songs.append(song)
+            if not Path(resolved).exists():
+                logger.info("Skipping missing playlist entry: %s", resolved)
                 continue
 
             try:
@@ -331,26 +345,21 @@ class PlaylistManager(QObject):
         if not songs:
             return False
 
-        index = 0
-        mode_val = 0
-        session_state: dict[str, object] = {}
-        try:
-            with open(meta_path, "r", encoding="utf-8") as f:
-                meta = json.load(f)
-            index = meta.get("current_index", 0)
-            mode_val = meta.get("play_mode", 0)
-            session_state = {
-                "play_state": meta.get("play_state", 0),
-                "position_ms": meta.get("position_ms", 0),
-                "current_file_path": meta.get("current_file_path", ""),
-            }
-            if not (0 <= index < len(songs)):
-                index = 0
-        except (FileNotFoundError, json.JSONDecodeError, OSError):
-            pass
+        current_file_path = str(session_state.get("current_file_path") or "")
+        if current_file_path:
+            resolved_current = str(Path(current_file_path).resolve())
+            matching_index = next(
+                (i for i, song in enumerate(songs) if song.file_path == resolved_current),
+                None,
+            )
+            if matching_index is not None:
+                meta_index = matching_index
+
+        if not (0 <= meta_index < len(songs)):
+            meta_index = 0
 
         self._session_state = session_state
-        self.load_playlist(songs, index)
+        self.load_playlist(songs, meta_index)
         try:
             self.set_play_mode(PlayMode(mode_val))
         except (ValueError, TypeError):

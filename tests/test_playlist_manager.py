@@ -18,8 +18,7 @@ from app.models.song import PlayMode, Song
 from tests.test_base import (
     SAMPLE_SONGS,
     SignalCapture,
-    create_temp_db,
-    destroy_temp_db,
+    create_test_wav,
     ensure_qapp,
 )
 
@@ -291,45 +290,91 @@ class TestSignals(PlaylistManagerTestCase):
 
 class TestPlaylistPersistence(PlaylistManagerTestCase):
     def test_save_and_restore_session_state(self) -> None:
-        db = create_temp_db()
-        try:
-            with TemporaryDirectory(prefix="smallplayer_home_") as tmp_home:
-                with patch("pathlib.Path.home", return_value=Path(tmp_home)):
-                    custom_songs: list[Song] = []
-                    music_dir = Path(tmp_home) / "music"
-                    music_dir.mkdir(parents=True, exist_ok=True)
-                    for idx, song in enumerate(SAMPLE_SONGS):
-                        custom_song = Song(
-                            title=song.title,
-                            artist=song.artist,
-                            album=song.album,
-                            duration=song.duration,
-                            file_path=str((music_dir / f"track_{idx}.{song.file_format}").resolve()),
-                            file_format=song.file_format,
-                            file_hash=song.file_hash,
+        with TemporaryDirectory(prefix="smallplayer_home_") as tmp_home:
+            with patch("pathlib.Path.home", return_value=Path(tmp_home)):
+                custom_songs: list[Song] = []
+                music_dir = Path(tmp_home) / "music"
+                music_dir.mkdir(parents=True, exist_ok=True)
+                for idx, _song in enumerate(SAMPLE_SONGS):
+                    file_path = Path(create_test_wav(music_dir, f"track_{idx}.wav")).resolve()
+                    custom_songs.append(
+                        Song(
+                            title=f"Track {idx}",
+                            artist="Artist",
+                            album="Album",
+                            duration=0.3,
+                            file_path=str(file_path),
+                            file_format="wav",
+                            file_hash=f"hash-{idx}",
                         )
-                        custom_songs.append(custom_song)
-                        db.add_song(custom_song)
-
-                    self.manager.load_playlist(custom_songs, start_index=2)
-                    self.manager.set_play_mode(PlayMode.LOOP)
-                    self.manager.set_session_state({
-                        "current_file_path": custom_songs[2].file_path,
-                        "position_ms": 91234,
-                        "play_state": 2,
-                    })
-                    saved_path = self.manager.save_to_m3u()
-                    self.assertTrue(saved_path.endswith("current.m3u8"))
-
-                    restored = PlaylistManager()
-                    self.assertTrue(restored.load_from_m3u(db))
-                    self.assertEqual(restored.current_index, 2)
-                    self.assertEqual(restored.play_mode, PlayMode.LOOP)
-                    self.assertEqual(
-                        restored.session_state["current_file_path"],
-                        custom_songs[2].file_path,
                     )
-                    self.assertEqual(restored.session_state["position_ms"], 91234)
-                    self.assertEqual(restored.session_state["play_state"], 2)
-        finally:
-            destroy_temp_db(db)
+
+                self.manager.load_playlist(custom_songs, start_index=2)
+                self.manager.set_play_mode(PlayMode.LOOP)
+                self.manager.set_session_state({
+                    "current_file_path": custom_songs[2].file_path,
+                    "position_ms": 91234,
+                    "play_state": 2,
+                })
+                saved_path = self.manager.save_to_m3u()
+                self.assertTrue(saved_path.endswith("current.m3u8"))
+
+                restored = PlaylistManager()
+                self.assertTrue(restored.load_from_m3u())
+                self.assertEqual(restored.current_index, 2)
+                self.assertEqual(restored.play_mode, PlayMode.LOOP)
+                self.assertEqual(len(restored.playlist), 4)
+                self.assertEqual(
+                    restored.get_current_song().file_path,  # type: ignore[union-attr]
+                    custom_songs[2].file_path,
+                )
+                self.assertEqual(
+                    restored.session_state["current_file_path"],
+                    custom_songs[2].file_path,
+                )
+                self.assertEqual(restored.session_state["position_ms"], 91234)
+                self.assertEqual(restored.session_state["play_state"], 2)
+
+    def test_load_from_m3u_skips_missing_entries(self) -> None:
+        with TemporaryDirectory(prefix="smallplayer_home_") as tmp_home:
+            with patch("pathlib.Path.home", return_value=Path(tmp_home)):
+                missing_song = Song(
+                    title="Missing",
+                    artist="Ghost",
+                    file_path=str((Path(tmp_home) / "gone.mp3").resolve()),
+                    file_format="mp3",
+                    file_hash="gone-hash",
+                )
+                self.manager.load_playlist([missing_song], start_index=0)
+                self.manager.save_to_m3u()
+
+                restored = PlaylistManager()
+                self.assertFalse(restored.load_from_m3u())
+
+    def test_load_from_m3u_realigns_index_after_missing_entries(self) -> None:
+        with TemporaryDirectory(prefix="smallplayer_home_") as tmp_home:
+            with patch("pathlib.Path.home", return_value=Path(tmp_home)):
+                music_dir = Path(tmp_home) / "music"
+                music_dir.mkdir(parents=True, exist_ok=True)
+                missing_path = str((music_dir / "missing.wav").resolve())
+                existing_path = str(Path(create_test_wav(music_dir, "survivor.wav")).resolve())
+
+                songs = [
+                    Song(title="Missing", file_path=missing_path, file_format="wav"),
+                    Song(title="Survivor", file_path=existing_path, file_format="wav"),
+                ]
+                self.manager.load_playlist(songs, start_index=1)
+                self.manager.set_session_state({
+                    "current_file_path": existing_path,
+                    "position_ms": 1234,
+                    "play_state": 0,
+                })
+                self.manager.save_to_m3u()
+
+                restored = PlaylistManager()
+                self.assertTrue(restored.load_from_m3u())
+                self.assertEqual(restored.current_index, 0)
+                self.assertEqual(
+                    restored.get_current_song().file_path,  # type: ignore[union-attr]
+                    existing_path,
+                )

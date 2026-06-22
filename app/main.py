@@ -2,7 +2,7 @@
 Application entry point for SmallPlayer.
 
 Initialises the Qt application, loads the stylesheet, creates all core
-modules (DatabaseManager, AudioEngine, PlaylistManager, MusicScanner),
+modules (AudioEngine, PlaylistManager, MusicScanner),
 and instantiates the MainWindow.
 """
 
@@ -25,7 +25,6 @@ from PySide6.QtWidgets import QApplication
 from app.core.audio_engine import AudioEngine
 from app.core.music_scanner import MusicScanner
 from app.core.playlist_manager import PlaylistManager
-from app.models.database import DatabaseManager
 from app.ui.main_window import MainWindow
 
 # ---------------------------------------------------------------------------
@@ -84,10 +83,6 @@ def main() -> None:
         app.setWindowIcon(QIcon(str(icon_path)))
 
     # -- Core modules --
-    # Database (shared instance).
-    db_manager = DatabaseManager()
-    db_manager.connect(check_same_thread=False)
-
     # Playlist manager (lives in main thread).
     playlist_manager = PlaylistManager()
 
@@ -95,7 +90,7 @@ def main() -> None:
     audio_engine = AudioEngine()
 
     # Music scanner (owns its own QThread).
-    music_scanner = MusicScanner(db_manager)
+    music_scanner = MusicScanner()
 
     # -- Main Window --
     window = MainWindow(
@@ -106,7 +101,7 @@ def main() -> None:
     window.show()
 
     # -- Bootstrap: restore the last session's playlist or start empty. --
-    restored = playlist_manager.load_from_m3u(db_manager)
+    restored = playlist_manager.load_from_m3u()
     if restored:
         logger.info("Restored playlist from ~/.smallplayer/playlists/current.m3u8")
     else:
@@ -119,7 +114,6 @@ def main() -> None:
     audio_engine.stop()
     music_scanner.request_stop()
     music_scanner.wait(2000)
-    db_manager.close()
 
     sys.exit(exit_code)
 

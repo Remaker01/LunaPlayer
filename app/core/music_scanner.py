@@ -1,6 +1,5 @@
 """
-Music scanner – traverses directories, extracts metadata with mutagen, and
-imports songs into the database.
+Music scanner – traverses directories and emits Song metadata for audio files.
 
 Runs in a background QThread so the UI stays responsive during a full scan.
 """
@@ -10,11 +9,10 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import List, Optional, Set
+from typing import Optional, Set
 
 from PySide6.QtCore import QMutex, QMutexLocker, QObject, QThread, Signal
 
-from app.models.database import DatabaseManager
 from app.models.song import Song
 from app.services.audio_metadata import compute_hash, extract_song_metadata
 
@@ -35,7 +33,7 @@ SUPPORTED_EXTENSIONS: Set[str] = {
 # ===================================================================
 
 class MusicScanner(QThread):
-    """Scan a directory tree for audio files and import them into the database.
+    """Scan a directory tree for audio files and emit Song metadata.
 
     Signals
     -------
@@ -44,7 +42,7 @@ class MusicScanner(QThread):
     progress(current, total)
         Emitted after each file is processed.
     song_found(song)
-        Emitted for every **new** song that was inserted into the database.
+        Emitted for every song discovered in the current scan.
     scan_finished(imported_count)
         Emitted when scanning completes.
     error_occurred(message)
@@ -57,10 +55,8 @@ class MusicScanner(QThread):
     scan_finished = Signal(int)
     error_occurred = Signal(str)
 
-    def __init__(self, db_manager: DatabaseManager,
-                 parent: Optional[QObject] = None) -> None:
+    def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
-        self._db = db_manager
         self._directory: str = ""
         self._stop_requested: bool = False
         self._mutex = QMutex()
@@ -71,7 +67,7 @@ class MusicScanner(QThread):
 
     def scan_directory(self, directory: str) -> None:
         """Start scanning *directory* (recursive) in a background thread."""
-        self._directory = os.path.normpath(directory)
+        self._directory = str(Path(directory).resolve())
         self.start()
 
     def request_stop(self) -> None:
@@ -91,26 +87,28 @@ class MusicScanner(QThread):
 
         try:
             # -- collect all audio files first --
-            audio_files: List[str] = []
+            audio_files: list[str] = []
+            seen_paths: set[str] = set()
             for root, _dirs, files in os.walk(directory):
                 if self._should_stop():
                     break
                 for name in files:
-                    if Path(name).suffix.lower() in SUPPORTED_EXTENSIONS:
-                        audio_files.append(os.path.join(root, name))
+                    if Path(name).suffix.lower() not in SUPPORTED_EXTENSIONS:
+                        continue
+                    resolved_path = str((Path(root) / name).resolve())
+                    if resolved_path in seen_paths:
+                        continue
+                    seen_paths.add(resolved_path)
+                    audio_files.append(resolved_path)
 
             total = len(audio_files)
-            imported = 0
+            discovered = 0
 
             for idx, file_path in enumerate(audio_files):
                 if self._should_stop():
                     break
 
                 self.progress.emit(idx + 1, total)
-
-                # Skip if path is already in database.
-                if self._db.get_song_by_path(file_path) is not None:
-                    continue
 
                 try:
                     song = extract_metadata(file_path)
@@ -122,20 +120,10 @@ class MusicScanner(QThread):
                 if song is None:
                     continue
 
-                # Deduplicate by hash.
-                if self._db.get_song_by_hash(song.file_hash) is not None:
-                    continue
+                self.song_found.emit(song)
+                discovered += 1
 
-                try:
-                    song_id = self._db.add_song(song)
-                    song.id = song_id
-                    self.song_found.emit(song)
-                    imported += 1
-                except Exception as exc:
-                    logger.warning("Failed to insert %s: %s", file_path, exc)
-                    self.error_occurred.emit(f"Database error for {file_path}: {exc}")
-
-            self.scan_finished.emit(imported)
+            self.scan_finished.emit(discovered)
 
         except Exception as exc:
             logger.exception("Scan failed")

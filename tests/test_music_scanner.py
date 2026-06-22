@@ -5,49 +5,19 @@ Uses generated WAV files to verify metadata extraction and directory scanning.
 
 from __future__ import annotations
 
-import math
 import os
-import struct
+import shutil
 import tempfile
 import time
 import unittest
-import wave
 from pathlib import Path
 
 from PySide6.QtCore import QCoreApplication
 
 from app.core.music_scanner import MusicScanner, extract_metadata, _compute_hash
 from app.models.song import Song
-from tests.test_base import create_temp_db, destroy_temp_db, ensure_qapp
+from tests.test_base import create_test_wav, ensure_qapp
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-SAMPLE_RATE = 44100
-
-
-def _make_wav(directory: str, name: str, duration_sec: float = 0.3,
-              frequency: float = 440.0) -> str:
-    """Create a short stereo WAV file and return its full path."""
-    n = int(SAMPLE_RATE * duration_sec)
-    samples = bytearray()
-    for i in range(n):
-        v = int(math.sin(2 * math.pi * frequency * i / SAMPLE_RATE) * 32767 * 0.3)
-        samples += struct.pack("<hh", v, v)
-
-    path = os.path.join(directory, name)
-    with wave.open(path, "wb") as w:
-        w.setnchannels(2)
-        w.setsampwidth(2)
-        w.setframerate(SAMPLE_RATE)
-        w.writeframes(bytes(samples))
-    return path
-
-
-# ===================================================================
-# Test extract_metadata (module-level helper)
-# ===================================================================
 
 class TestExtractMetadata(unittest.TestCase):
     """Verify metadata extraction from real audio files."""
@@ -58,11 +28,10 @@ class TestExtractMetadata(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls) -> None:
-        import shutil
         shutil.rmtree(cls._tmpdir, ignore_errors=True)
 
     def setUp(self) -> None:
-        self.wav_path = _make_wav(self._tmpdir, "test_song.wav")
+        self.wav_path = create_test_wav(self._tmpdir, "test_song.wav")
 
     def tearDown(self) -> None:
         Path(self.wav_path).unlink(missing_ok=True)
@@ -73,7 +42,6 @@ class TestExtractMetadata(unittest.TestCase):
         self.assertIsInstance(song, Song)
 
     def test_title_falls_back_to_filename(self) -> None:
-        """WAV files have no embedded title – the stem should be used."""
         song = extract_metadata(self.wav_path)
         self.assertIsNotNone(song)
         self.assertEqual(song.title, "test_song")
@@ -108,66 +76,55 @@ class TestComputeHash(unittest.TestCase):
     """SHA-256 hash computation."""
 
     def test_hash_is_consistent(self) -> None:
-        with tempfile.NamedTemporaryFile(suffix=".dat", delete=False) as f:
-            f.write(b"hello world")
-            p = f.name
+        with tempfile.NamedTemporaryFile(suffix=".dat", delete=False) as handle:
+            handle.write(b"hello world")
+            path = handle.name
         try:
-            h1 = _compute_hash(p)
-            h2 = _compute_hash(p)
+            h1 = _compute_hash(path)
+            h2 = _compute_hash(path)
             self.assertEqual(h1, h2)
-            self.assertEqual(len(h1), 64)  # SHA-256 hex = 64 chars
+            self.assertEqual(len(h1), 64)
         finally:
-            Path(p).unlink(missing_ok=True)
+            Path(path).unlink(missing_ok=True)
 
     def test_different_files_different_hash(self) -> None:
-        with tempfile.NamedTemporaryFile(suffix=".dat", delete=False) as f:
-            f.write(b"file a")
-            pa = f.name
-        with tempfile.NamedTemporaryFile(suffix=".dat", delete=False) as f:
-            f.write(b"file b")
-            pb = f.name
+        with tempfile.NamedTemporaryFile(suffix=".dat", delete=False) as handle:
+            handle.write(b"file a")
+            path_a = handle.name
+        with tempfile.NamedTemporaryFile(suffix=".dat", delete=False) as handle:
+            handle.write(b"file b")
+            path_b = handle.name
         try:
-            ha = _compute_hash(pa)
-            hb = _compute_hash(pb)
-            self.assertNotEqual(ha, hb)
+            self.assertNotEqual(_compute_hash(path_a), _compute_hash(path_b))
         finally:
-            Path(pa).unlink(missing_ok=True)
-            Path(pb).unlink(missing_ok=True)
+            Path(path_a).unlink(missing_ok=True)
+            Path(path_b).unlink(missing_ok=True)
 
-
-# ===================================================================
-# Integration: full MusicScanner (background thread)
-# ===================================================================
 
 class TestMusicScanner(unittest.TestCase):
-    """Test the MusicScanner QThread."""
+    """Test the MusicScanner QThread as a pure file scanner."""
 
     @classmethod
     def setUpClass(cls) -> None:
         cls._app = ensure_qapp()
         cls._tmpdir = tempfile.mkdtemp(prefix="scanner_int_")
 
-        # Create some test audio files
         cls._files: list[str] = []
-        cls._files.append(_make_wav(cls._tmpdir, "alpha.wav", 0.5, 440))
-        cls._files.append(_make_wav(cls._tmpdir, "beta.wav", 0.5, 660))
+        cls._files.append(create_test_wav(cls._tmpdir, "alpha.wav", 0.5, 440))
+        cls._files.append(create_test_wav(cls._tmpdir, "beta.wav", 0.5, 660))
 
-        # Create a sub-directory with more files
         subdir = os.path.join(cls._tmpdir, "sub")
         os.makedirs(subdir, exist_ok=True)
-        cls._files.append(_make_wav(subdir, "gamma.wav", 0.3, 880))
+        cls._files.append(create_test_wav(subdir, "gamma.wav", 0.3, 880))
 
-        # Create a non-audio file that should be ignored
         Path(os.path.join(cls._tmpdir, "notes.txt")).write_text("not music")
 
     @classmethod
     def tearDownClass(cls) -> None:
-        import shutil
         shutil.rmtree(cls._tmpdir, ignore_errors=True)
 
     def setUp(self) -> None:
-        self.db = create_temp_db()
-        self.scanner = MusicScanner(self.db)
+        self.scanner = MusicScanner()
         self.signals: dict[str, list] = {
             "started": [],
             "progress": [],
@@ -175,23 +132,17 @@ class TestMusicScanner(unittest.TestCase):
             "finished": [],
             "errors": [],
         }
-        self.scanner.scan_started.connect(
-            lambda d: self.signals["started"].append(d))
-        self.scanner.progress.connect(
-            lambda c, t: self.signals["progress"].append((c, t)))
-        self.scanner.song_found.connect(
-            lambda s: self.signals["song_found"].append(s))
-        self.scanner.scan_finished.connect(
-            lambda n: self.signals["finished"].append(n))
-        self.scanner.error_occurred.connect(
-            lambda m: self.signals["errors"].append(m))
+        self.scanner.scan_started.connect(lambda d: self.signals["started"].append(d))
+        self.scanner.progress.connect(lambda c, t: self.signals["progress"].append((c, t)))
+        self.scanner.song_found.connect(lambda s: self.signals["song_found"].append(s))
+        self.scanner.scan_finished.connect(lambda n: self.signals["finished"].append(n))
+        self.scanner.error_occurred.connect(lambda m: self.signals["errors"].append(m))
 
     def tearDown(self) -> None:
         self.scanner.request_stop()
         if not self.scanner.wait(5000):
             self.scanner.terminate()
             self.scanner.wait()
-        destroy_temp_db(self.db)
 
     def _wait_for_finished(self, timeout: float = 10.0) -> None:
         deadline = time.monotonic() + timeout
@@ -202,16 +153,10 @@ class TestMusicScanner(unittest.TestCase):
             time.sleep(0.02)
         raise TimeoutError("Scanner did not finish within timeout")
 
-    # ------------------------------------------------------------------
-    # Tests
-    # ------------------------------------------------------------------
-
     def test_scanner_finds_all_audio_files(self) -> None:
-        """Should find 3 WAV files and ignore notes.txt."""
         self.scanner.scan_directory(self._tmpdir)
         self._wait_for_finished()
-        imported = self.signals["finished"][0]
-        self.assertEqual(imported, 3, f"Expected 3 files, got {imported}")
+        self.assertEqual(self.signals["finished"][0], 3)
 
     def test_scanner_emits_started_signal(self) -> None:
         self.scanner.scan_directory(self._tmpdir)
@@ -223,43 +168,29 @@ class TestMusicScanner(unittest.TestCase):
         self.scanner.scan_directory(self._tmpdir)
         self._wait_for_finished()
         self.assertGreater(len(self.signals["progress"]), 0)
-        last_progress = self.signals["progress"][-1]
-        self.assertEqual(last_progress, (3, 3))
+        self.assertEqual(self.signals["progress"][-1], (3, 3))
 
     def test_scanner_emits_song_found(self) -> None:
         self.scanner.scan_directory(self._tmpdir)
         self._wait_for_finished()
         self.assertEqual(len(self.signals["song_found"]), 3)
 
-    def test_songs_are_in_database(self) -> None:
-        self.scanner.scan_directory(self._tmpdir)
-        self._wait_for_finished()
-        songs = self.db.get_all_songs()
-        self.assertEqual(len(songs), 3)
-
     def test_songs_have_correct_metadata(self) -> None:
         self.scanner.scan_directory(self._tmpdir)
         self._wait_for_finished()
-        songs = self.db.get_all_songs()
-        titles = {s.title for s in songs}
+        titles = {song.title for song in self.signals["song_found"]}
         self.assertIn("alpha", titles)
         self.assertIn("beta", titles)
         self.assertIn("gamma", titles)
 
-    def test_scanning_twice_is_idempotent(self) -> None:
-        """Second scan should **not** import duplicates."""
+    def test_scanning_twice_returns_same_results(self) -> None:
         self.scanner.scan_directory(self._tmpdir)
         self._wait_for_finished()
 
-        # Reset signal capture
-        self.signals["song_found"].clear()
-        self.signals["finished"].clear()
-
-        # Scan again with a fresh scanner connected to the same DB
-        scanner2 = MusicScanner(self.db)
+        scanner2 = MusicScanner()
         found2: list[Song] = []
-        scanner2.song_found.connect(found2.append)
         finished2: list[int] = []
+        scanner2.song_found.connect(found2.append)
         scanner2.scan_finished.connect(finished2.append)
 
         scanner2.scan_directory(self._tmpdir)
@@ -270,45 +201,66 @@ class TestMusicScanner(unittest.TestCase):
             QCoreApplication.processEvents()
             time.sleep(0.02)
 
-        self.assertEqual(finished2[0], 0,
-                         "Second scan should import 0 new songs")
-        self.assertEqual(len(found2), 0)
-
-        # DB should still have 3 songs
-        self.assertEqual(len(self.db.get_all_songs()), 3)
+        self.assertEqual(finished2[0], 3)
+        self.assertEqual(len(found2), 3)
 
         scanner2.request_stop()
         scanner2.wait(3000)
 
     def test_stop_aborts_scan(self) -> None:
-        """request_stop() should cause scanner to exit early."""
         self.scanner.scan_directory(self._tmpdir)
         time.sleep(0.1)
         QCoreApplication.processEvents()
         self.scanner.request_stop()
-        ok = self.scanner.wait(5000)
-        self.assertTrue(ok, "Scanner did not stop within 5 s")
-        # finished may or may not have been emitted – that's acceptable.
+        self.assertTrue(self.scanner.wait(5000))
 
     def test_no_errors_during_normal_scan(self) -> None:
         self.scanner.scan_directory(self._tmpdir)
         self._wait_for_finished()
-        self.assertEqual(len(self.signals["errors"]), 0,
-                         f"Unexpected errors: {self.signals['errors']}")
+        self.assertEqual(self.signals["errors"], [])
 
     def test_songs_have_hash(self) -> None:
         self.scanner.scan_directory(self._tmpdir)
         self._wait_for_finished()
-        for song in self.db.get_all_songs():
-            self.assertTrue(len(song.file_hash) > 0,
-                            f"Song {song.title} has empty hash")
+        for song in self.signals["song_found"]:
+            self.assertTrue(len(song.file_hash) > 0)
 
     def test_songs_have_duration(self) -> None:
         self.scanner.scan_directory(self._tmpdir)
         self._wait_for_finished()
-        for song in self.db.get_all_songs():
-            self.assertGreater(song.duration, 0,
-                               f"Song {song.title} has zero duration")
+        for song in self.signals["song_found"]:
+            self.assertGreater(song.duration, 0)
+
+    def test_moved_file_is_discovered_at_new_path(self) -> None:
+        first_dir = tempfile.mkdtemp(prefix="scanner_move_src_")
+        second_dir = tempfile.mkdtemp(prefix="scanner_move_dst_")
+        try:
+            original_path = create_test_wav(first_dir, "moved_song.wav", 0.2, 523.25)
+            moved_path = os.path.join(second_dir, "moved_song.wav")
+            shutil.move(original_path, moved_path)
+
+            scanner2 = MusicScanner()
+            found2: list[Song] = []
+            finished2: list[int] = []
+            scanner2.song_found.connect(found2.append)
+            scanner2.scan_finished.connect(finished2.append)
+
+            scanner2.scan_directory(second_dir)
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline:
+                if finished2:
+                    break
+                QCoreApplication.processEvents()
+                time.sleep(0.02)
+
+            self.assertEqual(finished2[0], 1)
+            self.assertEqual(found2[0].file_path, str(Path(moved_path).resolve()))
+
+            scanner2.request_stop()
+            scanner2.wait(3000)
+        finally:
+            shutil.rmtree(first_dir, ignore_errors=True)
+            shutil.rmtree(second_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

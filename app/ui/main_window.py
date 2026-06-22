@@ -26,7 +26,7 @@ import logging
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QDir, Qt, QTimer, Slot, QUrl
+from PySide6.QtCore import QDir, Qt, Slot, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -97,16 +97,13 @@ class MainWindow(QMainWindow):
         # -- Track whether we are updating the slider programmatically --
         self._slider_dragging: bool = False
 
-        # -- Collect songs from the most recent scan (used to replace
-        #    the playlist on scan_finished rather than reloading from DB).
+        # -- Collect songs from the most recent scan so the UI can either
+        #    replace or append the finished scan result in one step.
         self._scanned_songs: list[Song] = []
-        self._last_scanned_dir: str = ""
         self._scan_append_mode: bool = False
         self._pending_scan_requests: list[tuple[str, bool]] = []
         self._last_position_ms: int = 0
-        self._pending_restore_session: dict[str, object] = {}
-        self._session_restore_applied: bool = False
-        self._preserve_stopped_position: bool = False
+        self._restore_selection_only: bool = False
 
         # ---- Build UI ----
         self._setup_window()
@@ -481,11 +478,12 @@ class MainWindow(QMainWindow):
         """Refresh the playlist widget when the playlist is loaded."""
         songs = self._playlist_manager.playlist
         self._playlist_widget.load_songs(songs)
-        self._pending_restore_session = self._normalize_session_state(
-            self._playlist_manager.session_state
+        session_state = self._normalize_session_state(self._playlist_manager.session_state)
+        self._restore_selection_only = (
+            bool(session_state.get("current_file_path"))
+            and self._playlist_manager.current_index >= 0
         )
         self._playlist_manager.clear_session_state()
-        self._session_restore_applied = False
         if not songs:
             self._reset_cover_art()
         self._update_song_info(None)
@@ -506,19 +504,20 @@ class MainWindow(QMainWindow):
     def _on_current_song_changed(self, song: Optional[Song]) -> None:
         """The current song changed – update UI and load into audio engine."""
         if song is not None and song.file_path:
-            logger.info("Playing: %s - %s", song.artist, song.title)
             self._update_cover_art(song)
-            self._load_lyrics_for(song)
-            if self._should_restore_stopped_session(song):
-                self._apply_stopped_session(song)
-            elif self._should_restore_paused_session(song):
-                self._apply_paused_session(song)
+            if self._restore_selection_only:
+                self._restore_selection_only = False
+                self._progress_slider.setRange(0, 0)
+                self._progress_slider.setValue(0)
+                self._time_current.setText("0:00")
+                self._time_total.setText("0:00")
+                self._last_position_ms = 0
             else:
-                self._preserve_stopped_position = False
+                logger.info("Playing: %s - %s", song.artist, song.title)
+                self._load_lyrics_for(song)
                 self._audio_engine.play(song.file_path)
         else:
             # Song removed / playlist cleared → stop playback.
-            self._preserve_stopped_position = False
             self._audio_engine.stop()
             self._reset_cover_art()
 
@@ -542,6 +541,10 @@ class MainWindow(QMainWindow):
     @Slot(int)
     def _on_play_requested(self, index: int) -> None:
         """User double-clicked or chose 'Play' – jump to that song."""
+        if self._audio_engine.state != PlayState.STOPPED:
+            # Explicit track changes should interrupt the current playback
+            # immediately, including songs appended from online search.
+            self._audio_engine.stop()
         self._playlist_manager.go_to(index)
 
     @Slot(int)
@@ -595,7 +598,6 @@ class MainWindow(QMainWindow):
         """Update slider range and total time label."""
         self._progress_slider.setRange(0, max(1, duration_ms))
         self._time_total.setText(self._format_time(duration_ms))
-        self._apply_pending_restore(duration_ms)
 
     @Slot(int)
     def _on_state_changed(self, state_int: int) -> None:
@@ -607,10 +609,9 @@ class MainWindow(QMainWindow):
             self._play_btn.setText("▶")
         else:  # STOPPED
             self._play_btn.setText("▶")
-            if not self._should_preserve_stopped_position():
-                self._progress_slider.setValue(0)
-                self._time_current.setText("0:00")
-                self._last_position_ms = 0
+            self._progress_slider.setValue(0)
+            self._time_current.setText("0:00")
+            self._last_position_ms = 0
         self._update_tray_play_pause()
 
     @Slot(str)
@@ -631,36 +632,25 @@ class MainWindow(QMainWindow):
     @Slot()
     def _on_play_pause(self) -> None:
         """Toggle between play and pause."""
-        resume_from_restored_stop = (
-            self._preserve_stopped_position and self._progress_slider.value() > 0
-        )
         state = self._audio_engine.state
         if state == PlayState.PLAYING:
-            self._preserve_stopped_position = False
             self._audio_engine.pause()
         elif state == PlayState.PAUSED:
-            self._preserve_stopped_position = False
             self._audio_engine.resume()
         else:
             # Stopped – play from the current playlist selection.
             song = self._playlist_manager.get_current_song()
             if song is not None:
                 self._audio_engine.play(song.file_path)
-                if resume_from_restored_stop:
-                    position_ms = self._progress_slider.value()
-                    QTimer.singleShot(0, lambda pos=position_ms: self._audio_engine.seek(pos))
-                self._preserve_stopped_position = False
             else:
                 # Try to start from the first song.
                 songs = self._playlist_manager.playlist
                 if songs:
-                    self._preserve_stopped_position = False
                     self._playlist_manager.go_to(0)
 
     @Slot()
     def _on_stop(self) -> None:
         """Stop playback."""
-        self._preserve_stopped_position = False
         self._audio_engine.stop()
 
     @Slot()
@@ -840,10 +830,11 @@ class MainWindow(QMainWindow):
         song = extract_song_metadata(file_path)
         if song is not None:
             return song
+        resolved_path = str(Path(file_path).resolve())
         return Song(
-            title=Path(file_path).stem,
-            file_path=file_path,
-            file_format=Path(file_path).suffix.lower().lstrip("."),
+            title=Path(resolved_path).stem,
+            file_path=resolved_path,
+            file_format=Path(resolved_path).suffix.lower().lstrip("."),
         )
 
     @Slot(bool)
@@ -864,7 +855,6 @@ class MainWindow(QMainWindow):
     def _on_scan_started(self, directory: str) -> None:
         """Show scanning progress and reset song collector."""
         self._scanned_songs.clear()
-        self._last_scanned_dir = Path(directory).as_posix()
         self._scan_progress.setValue(0)
         self._scan_progress.show()
         self._status_label.setText(f"正在扫描 {Path(directory).name}…")
@@ -886,19 +876,7 @@ class MainWindow(QMainWindow):
     def _on_scan_finished(self, imported: int) -> None:
         """Scan complete – load the scanned songs into the playlist."""
         self._scan_progress.hide()
-
-        db = getattr(self._music_scanner, "_db", None)
-
-        # Collect songs: newly imported + existing in DB under the scanned dir.
         songs: list[Song] = list(self._scanned_songs)
-        seen_paths = {s.file_path for s in songs}
-
-        if db is not None and db.is_connected and self._last_scanned_dir:
-            prefix = self._last_scanned_dir
-            for s in db.get_all_songs():
-                if s.file_path.replace("\\", "/").startswith(prefix) and s.file_path not in seen_paths:
-                    songs.append(s)
-                    seen_paths.add(s.file_path)
 
         if songs:
             if self._scan_append_mode:
@@ -924,8 +902,10 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def _on_search_add_to_playlist(self, song: Song) -> None:
         """Add a search result song to the current playlist."""
-        self._playlist_manager.add_song(song)
-        self._status_label.setText(f"已添加 '{song.title}' 到播放列表.")
+        if self._append_unique_songs([song]) > 0:
+            self._status_label.setText(f"已添加 '{song.title}' 到播放列表.")
+        else:
+            self._status_label.setText(f"'{song.title}' 已在播放列表中.")
 
     @Slot(object)
     def _on_search_download(self, song: Song) -> None:
@@ -942,13 +922,14 @@ class MainWindow(QMainWindow):
 
     @Slot(object, str)
     def _on_download_ready(self, song: Song, local_path: str) -> None:
-        """A song download finished – add it to database and playlist."""
+        """A song download finished – add it to the playlist if needed."""
         self._active_downloads = max(0, self._active_downloads - 1)
-        song.file_path = local_path
-        self._playlist_manager.add_song(song)
+        song.file_path = str(Path(local_path).resolve())
+        added = self._append_unique_songs([song])
+        status = f"下载完成: {song.title}" if added > 0 else f"下载完成，播放列表中已存在: {song.title}"
         self._status_label.setText(
-            f"下载完成: {song.title}"
-            + (f"  (剩余 {self._active_downloads} 个)" if self._active_downloads else ""))
+            status + (f"  (剩余 {self._active_downloads} 个)" if self._active_downloads else "")
+        )
 
     @Slot(object, str)
     def _on_download_error(self, song: Song, message: str) -> None:
@@ -1114,9 +1095,11 @@ class MainWindow(QMainWindow):
                 logger.warning("Failed to import %s: %s", file_path, exc)
 
         if songs:
-            for song in songs:
-                self._playlist_manager.add_song(song)
-            message = f"已添加 {len(songs)} 首歌曲."
+            added = self._append_unique_songs(songs)
+            skipped = len(songs) - added
+            message = f"已添加 {added} 首歌曲."
+            if skipped:
+                message += f" 跳过 {skipped} 首重复歌曲."
             if failed:
                 message += f" 另有 {failed} 首导入失败."
             self._status_label.setText(message)
@@ -1125,7 +1108,7 @@ class MainWindow(QMainWindow):
 
     def _queue_scan_directory(self, directory: str, append: bool) -> None:
         """Start a directory scan now or append it to the scan queue."""
-        normalized = str(Path(directory))
+        normalized = str(Path(directory).resolve())
         if self._music_scanner.isRunning():
             self._pending_scan_requests.append((normalized, append))
             self._status_label.setText(f"已加入扫描队列: {Path(directory).name}")
@@ -1165,7 +1148,7 @@ class MainWindow(QMainWindow):
         for url in mime_data.urls():
             if not url.isLocalFile():
                 continue
-            path = Path(url.toLocalFile())
+            path = Path(url.toLocalFile()).resolve()
             if path.is_dir():
                 directories.append(str(path))
             elif path.is_file() and self._is_supported_audio_file(str(path)):
@@ -1209,115 +1192,11 @@ class MainWindow(QMainWindow):
         if not file_path:
             return {}
 
-        position_ms = state.get("position_ms", 0)
-        play_state = state.get("play_state", int(PlayState.STOPPED))
-        try:
-            position_ms = max(0, int(position_ms))
-        except (TypeError, ValueError):
-            position_ms = 0
-        try:
-            play_state = int(play_state)
-        except (TypeError, ValueError):
-            play_state = int(PlayState.STOPPED)
-
         return {
             "current_file_path": file_path,
-            "position_ms": position_ms,
-            "play_state": play_state,
+            "position_ms": 0,
+            "play_state": int(PlayState.STOPPED),
         }
-
-    def _should_restore_stopped_session(self, song: Song) -> bool:
-        """Return whether this song should restore into a stopped position."""
-        if self._session_restore_applied or not self._pending_restore_session:
-            return False
-        return (
-            self._pending_restore_session.get("current_file_path") == song.file_path
-            and self._pending_restore_session.get("play_state") == int(PlayState.STOPPED)
-        )
-
-    def _apply_stopped_session(self, song: Song) -> None:
-        """Restore slider/time state without auto-starting playback."""
-        duration_ms = max(0, int(song.duration * 1000))
-        position_ms = self._clamp_restore_position(duration_ms)
-        self._progress_slider.setRange(0, max(1, duration_ms))
-        self._progress_slider.setValue(position_ms)
-        self._time_current.setText(self._format_time(position_ms))
-        self._time_total.setText(self._format_time(duration_ms))
-        self._last_position_ms = position_ms
-        self._preserve_stopped_position = True
-        self._session_restore_applied = True
-        self._pending_restore_session = {}
-        if self._lyrics_window.isVisible():
-            self._lyrics_window.sync_position(position_ms)
-        self._status_label.setText("已恢复上次播放进度")
-
-    def _apply_pending_restore(self, duration_ms: int) -> None:
-        """Seek after startup when restoring a saved playing session."""
-        if self._session_restore_applied or not self._pending_restore_session:
-            return
-
-        current_song = self._playlist_manager.get_current_song()
-        if current_song is None:
-            return
-        if self._pending_restore_session.get("current_file_path") != current_song.file_path:
-            self._pending_restore_session = {}
-            return
-
-        position_ms = self._clamp_restore_position(duration_ms)
-        play_state = int(self._pending_restore_session.get("play_state", int(PlayState.STOPPED)))
-        if play_state != int(PlayState.PLAYING):
-            return
-
-        if position_ms > 0:
-            self._progress_slider.setValue(position_ms)
-            self._time_current.setText(self._format_time(position_ms))
-            self._last_position_ms = position_ms
-            QTimer.singleShot(0, lambda pos=position_ms: self._audio_engine.seek(pos))
-
-        self._preserve_stopped_position = False
-        self._session_restore_applied = True
-        self._pending_restore_session = {}
-        self._status_label.setText("已恢复上次播放状态")
-
-    def _clamp_restore_position(self, duration_ms: int) -> int:
-        """Clamp the saved position to the currently known track duration."""
-        try:
-            position_ms = int(self._pending_restore_session.get("position_ms", 0))
-        except (TypeError, ValueError):
-            return 0
-
-        if duration_ms <= 0:
-            return max(0, position_ms)
-        upper_bound = duration_ms - 1000 if duration_ms > 2000 else duration_ms
-        return max(0, min(position_ms, upper_bound))
-
-    def _should_preserve_stopped_position(self) -> bool:
-        """Keep the restored slider position visible after startup stop-state restore."""
-        return self._preserve_stopped_position
-
-    def _should_restore_paused_session(self, song: Song) -> bool:
-        """Return whether startup should restore this song without its old progress."""
-        if self._session_restore_applied or not self._pending_restore_session:
-            return False
-        return (
-            self._pending_restore_session.get("current_file_path") == song.file_path
-            and self._pending_restore_session.get("play_state") == int(PlayState.PAUSED)
-        )
-
-    def _apply_paused_session(self, song: Song) -> None:
-        """Restore only the selected song for a previously paused session."""
-        duration_ms = max(0, int(song.duration * 1000))
-        self._progress_slider.setRange(0, max(1, duration_ms))
-        self._progress_slider.setValue(0)
-        self._time_current.setText("0:00")
-        self._time_total.setText(self._format_time(duration_ms))
-        self._last_position_ms = 0
-        self._preserve_stopped_position = False
-        self._session_restore_applied = True
-        self._pending_restore_session = {}
-        if self._lyrics_window.isVisible():
-            self._lyrics_window.sync_position(0)
-        self._status_label.setText("已恢复上次播放歌曲")
 
     def _update_song_info(self, song: Optional[Song]) -> None:
         """Update the song info label in the playback bar."""
@@ -1364,7 +1243,7 @@ class MainWindow(QMainWindow):
             self._lyrics_window.load_lyrics([])
 
     def _build_session_state(self) -> dict[str, object]:
-        """Collect the current playback session for persistence on exit."""
+        """Collect the selected song so startup can restore the same row."""
         current_song = self._playlist_manager.get_current_song()
         if current_song is None:
             return {
@@ -1373,14 +1252,10 @@ class MainWindow(QMainWindow):
                 "play_state": int(PlayState.STOPPED),
             }
 
-        position_ms = self._progress_slider.value()
-        if position_ms <= 0:
-            position_ms = self._last_position_ms
-
         return {
             "current_file_path": current_song.file_path,
-            "position_ms": max(0, int(position_ms)),
-            "play_state": int(self._audio_engine.state),
+            "position_ms": 0,
+            "play_state": int(PlayState.STOPPED),
         }
 
     # ================================================================
