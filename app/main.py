@@ -22,6 +22,7 @@ if str(_project_root) not in sys.path:
 from PySide6.QtCore import QCoreApplication, Qt
 from PySide6.QtWidgets import QApplication
 
+from app.app_info import APP_NAME, APP_ORGANIZATION, APP_VERSION
 from app.core.audio_engine import AudioEngine
 from app.core.music_scanner import MusicScanner
 from app.core.playlist_manager import PlaylistManager
@@ -65,9 +66,9 @@ def main() -> None:
     """Application entry point."""
 
     # -- Qt Application --
-    QCoreApplication.setApplicationName("SmallPlayer")
-    QCoreApplication.setOrganizationName("SmallPlayer")
-    QCoreApplication.setApplicationVersion("0.1.0")
+    QCoreApplication.setApplicationName(APP_NAME)
+    QCoreApplication.setOrganizationName(APP_ORGANIZATION)
+    QCoreApplication.setApplicationVersion(APP_VERSION)
 
     app = QApplication(sys.argv)
     app.setAttribute(Qt.AA_DontCreateNativeWidgetSiblings)

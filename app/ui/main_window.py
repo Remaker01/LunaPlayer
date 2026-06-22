@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -48,13 +49,14 @@ from PySide6.QtWidgets import (
     QMenu,
 )
 
+from app.app_info import about_text, window_title
 from app.core.audio_engine import AudioEngine, PlayState
 from app.core.music_scanner import MusicScanner, SUPPORTED_EXTENSIONS
 from app.core.playlist_manager import PlaylistManager
 from app.models.song import PlayMode, Song
 from app.services.audio_metadata import extract_cover_art, extract_song_metadata
 from app.ui.lyrics_window import LrcParser, LyricsWindow
-from app.ui.widgets import PlaylistWidget, SearchPanel, SongInfoDialog, SettingsDialog
+from app.ui.widgets import PlaylistWidget, SearchPanel, SongInfoDialog, Settings, SettingsDialog
 from app.services.music_provider import MusicProvider
 import app.services.config as cfg
 
@@ -68,7 +70,6 @@ class MainWindow(QMainWindow):
     # Constants
     # ------------------------------------------------------------------
 
-    WINDOW_TITLE = "SmallPlayer - 音乐播放器"
     DEFAULT_WIDTH = 1100
     DEFAULT_HEIGHT = 700
     MIN_WIDTH = 800
@@ -146,7 +147,7 @@ class MainWindow(QMainWindow):
 
     def _setup_window(self) -> None:
         """Configure the main window geometry and properties."""
-        self.setWindowTitle(self.WINDOW_TITLE)
+        self.setWindowTitle(window_title)
         self.setMinimumSize(self.MIN_WIDTH, self.MIN_HEIGHT)
         self.resize(self.DEFAULT_WIDTH, self.DEFAULT_HEIGHT)
         self.setAcceptDrops(True)
@@ -232,6 +233,13 @@ class MainWindow(QMainWindow):
         self._show_lyrics_action.setShortcut(QKeySequence("Ctrl+L"))
         self._show_lyrics_action.triggered.connect(self._on_toggle_lyrics)
         view_menu.addAction(self._show_lyrics_action)
+
+        # -- Help menu --
+        help_menu = menu_bar.addMenu("帮助(&H)")
+
+        about_action = QAction("关于 SmallPlayer(&A)", self)
+        about_action.triggered.connect(self._on_show_about)
+        help_menu.addAction(about_action)
 
     # ---------------------------------------------------------------
     # Central area – playlist + search
@@ -956,6 +964,11 @@ class MainWindow(QMainWindow):
             self._playlist_manager.set_play_mode(new_settings.default_play_mode)
             self._status_label.setText("设置已保存")
 
+    @Slot()
+    def _on_show_about(self) -> None:
+        """Show the About dialog."""
+        QMessageBox.about(self, "关于 SmallPlayer", about_text())
+
     def _apply_saved_settings(self) -> None:
         """Load persisted settings and apply them to the UI."""
         saved = Settings.load()
@@ -979,7 +992,7 @@ class MainWindow(QMainWindow):
             self._tray_icon.setIcon(self.style().standardIcon(
                 self.style().SP_MediaPlay))
 
-        self._tray_icon.setToolTip(self.WINDOW_TITLE)
+        self._tray_icon.setToolTip(window_title)
 
         # -- Context menu --
         tray_menu = QMenu(self)
