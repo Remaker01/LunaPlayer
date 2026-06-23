@@ -3,7 +3,7 @@
 PySide6>=6.11
 av>=17.0
 mutagen>=1.47
-httpcore>=1.0
+urllib3>=2.6
 
 
 # Web UI (uncomment when needed)

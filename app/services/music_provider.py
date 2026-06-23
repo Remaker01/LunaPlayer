@@ -1,15 +1,15 @@
 """
 MusicProvider – online music search & download (90svip API).
-Uses ``httpcore`` with HTTP/2. All I/O runs in background QThreads.
+Uses ``urllib3``. All I/O runs in background QThreads.
 """
 
 from __future__ import annotations
 
-import json, logging, re
+import logging, re
 from pathlib import Path
 from urllib.parse import quote, urlencode, urljoin
 
-import httpcore
+import urllib3
 from PySide6.QtCore import QObject, QThread, Signal
 
 from app.models.song import Song
@@ -19,24 +19,27 @@ logger = logging.getLogger(__name__)
 BASE_URL = "https://music.90svip.cn/"
 UA = ("Mozilla/5.0 (Linux; Android 6.0; Nexus 5 Build/MRA58N) "
       "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/127.0.0.0 Mobile Safari/537.36")
-
+HTTP = urllib3.PoolManager(timeout=20.0, retries=3, maxsize=10)
 
 def _headers(extra: dict | None = None) -> dict:
     h = {"User-Agent": UA, "Accept": "application/json, text/javascript, */*; q=0.01",
-         "Accept-Encoding": "gzip, deflate, br", "Origin": BASE_URL.rstrip("/"),
+         "Accept-Encoding": "gzip, deflate", "Origin": BASE_URL.rstrip("/"),
          "Referer": BASE_URL, "X-Requested-With": "XMLHttpRequest"}
-    if extra: h.update(extra)
+    if extra:
+        h.update(extra)
     return h
 
 
 def _abs(rel: str) -> str:
-    if not rel or rel.startswith(("http://", "https://")): return rel
+    if not rel or rel.startswith(("http://", "https://")):
+        return rel
     return urljoin(BASE_URL, rel)
 
 
 def _build_song(item: dict) -> Song | None:
     title = (item.get("name") or "").strip()
-    if not title: return None
+    if not title:
+        return None
     return Song(title=title, artist=(item.get("artist") or "").strip() or "未知艺术家",
                 file_path=_abs(item.get("url", "")), file_format="mp3",
                 duration=float(item.get("duration") or 0))
@@ -80,18 +83,19 @@ class _SearchWorker(_Worker):
         self._keyword, self._page, self._source = keyword, page, source
 
     def run_task(self) -> None:
-        with httpcore.ConnectionPool(http2=True, http1=False) as pool:
-            params = {"input": self._keyword, "filter": "name",
-                      "type": self._source, "page": self._page}
-            body = urlencode(params).encode()
-            referer = f"{BASE_URL}?name={quote(self._keyword, safe='')}&type={self._source}"
-            resp = pool.request("POST", BASE_URL,
-                headers=_headers({"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                                  "Referer": referer}),
-                content=body)
-        if resp.status != 200: self.error.emit(f"HTTP {resp.status}"); return
-        payload = json.loads(resp.content)
-        if payload.get("code") != 200: self.error.emit(payload.get("error", "?")); return
+        params = {"input": self._keyword, "filter": "name",
+                    "type": self._source, "page": self._page}
+        body = urlencode(params).encode()
+        referer = f"{BASE_URL}?name={quote(self._keyword, safe='')}&type={self._source}"
+        resp = HTTP.request("POST", BASE_URL,
+            headers=_headers({"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                                "Referer": referer}),
+            body=body)
+        if resp.status != 200:
+            self.error.emit(f"HTTP {resp.status}"); return
+        payload = resp.json()
+        if payload.get("code") != 200:
+            self.error.emit(payload.get("error", "?")); return
         songs = [s for item in payload.get("data", []) if (s := _build_song(item))]
         self.task_done.emit(songs)
 
@@ -104,18 +108,19 @@ class _DownloadWorker(_Worker):
         self._url, self._save_path = url, save_path
 
     def run_task(self) -> None:
-        with httpcore.ConnectionPool() as pool:
-            url = self._url
-            for _ in range(5):
-                resp = pool.request("GET", url, headers=_headers({"Referer": BASE_URL}))
-                if resp.status == 200: break
-                if resp.status in (301, 302, 303, 307, 308):
-                    loc = next((v.decode() for n, v in resp.headers if n.lower() == b"location"), None)
-                    if loc: url = urljoin(url, loc); continue
-                self.error.emit(f"HTTP {resp.status}"); return
-            else: self.error.emit("Too many redirects"); return
-            Path(self._save_path).parent.mkdir(parents=True, exist_ok=True)
-            Path(self._save_path).write_bytes(resp.content)
+        resp = HTTP.request("GET", self._url,
+            headers=_headers({"Referer": BASE_URL, "Accept": "*/*"}),
+            preload_content=False,
+            decode_content=True)
+        if resp.status != 200:
+            resp.release_conn()
+            self.error.emit(f"HTTP {resp.status}")
+            return
+        Path(self._save_path).parent.mkdir(parents=True, exist_ok=True)
+        with Path(self._save_path).open("wb") as output:
+            for chunk in resp.stream(65536, decode_content=True):
+                output.write(chunk)
+        resp.release_conn()
         self.task_done.emit(self._save_path)
 
 
@@ -126,10 +131,11 @@ class _LyricsWorker(_Worker):
         self._lrc_url = lrc_url
 
     def run_task(self) -> None:
-        with httpcore.ConnectionPool() as pool:
-            resp = pool.request("GET", self._lrc_url, headers=_headers({"Referer": BASE_URL}))
+        resp = HTTP.request("GET", self._lrc_url,
+            headers=_headers({"Referer": BASE_URL, "Accept": "*/*"})
+        )
         if resp.status == 200:
-            self.task_done.emit(resp.content.decode("utf-8", errors="replace"))
+            self.task_done.emit(resp.data.decode("utf-8", errors="replace"))
         else:
             self.error.emit(f"HTTP {resp.status}")
 
