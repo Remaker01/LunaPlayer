@@ -8,6 +8,7 @@ from pathlib import Path
 from unittest.mock import MagicMock
 
 from app.core.audio_engine import AudioEngine
+from app.core.favorites_manager import FavoritesManager
 from app.core.music_scanner import MusicScanner
 from app.core.playlist_manager import PlaylistManager
 from app.models.song import Song
@@ -33,11 +34,14 @@ class TestMainWindowRestore(unittest.TestCase):
 
     def setUp(self) -> None:
         self.playlist_manager = PlaylistManager()
+        self.favorites_manager = FavoritesManager()
+        self.favorites_manager.save_favorites = MagicMock()  # type: ignore[method-assign]
         self.audio_engine = AudioEngine()
         self.audio_engine.play = MagicMock()  # type: ignore[method-assign]
         self.music_scanner = MusicScanner()
         self.window = _TestMainWindow(
             playlist_manager=self.playlist_manager,
+            favorites_manager=self.favorites_manager,
             audio_engine=self.audio_engine,
             music_scanner=self.music_scanner,
         )
@@ -70,6 +74,80 @@ class TestMainWindowRestore(unittest.TestCase):
             self.assertEqual(self.window._song_info_label.text(), "♫  Artist – Restore Me")
             self.assertEqual(self.window._time_current.text(), "0:00")
             self.assertEqual(self.window._time_total.text(), "0:00")
+
+    def test_song_info_area_is_bounded_to_protect_progress_slider(self) -> None:
+        self.assertEqual(
+            self.window._song_info_label.maximumWidth(),
+            MainWindow.SONG_INFO_MAX_WIDTH,
+        )
+        self.assertEqual(
+            self.window._progress_slider.minimumWidth(),
+            MainWindow.PROGRESS_SLIDER_MIN_WIDTH,
+        )
+
+        long_song = Song(
+            title="A Very Long Song Title " * 8,
+            artist="A Very Long Artist Name " * 4,
+            duration=1.0,
+            file_path="D:/music/long.wav",
+            file_format="wav",
+        )
+
+        self.window._update_song_info(long_song)
+        self.assertIn("…", self.window._song_info_label.text())
+
+    def test_favorite_add_and_remove_updates_playlist_marker(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mainwindow_favorites_") as tmpdir:
+            file_path = str(Path(create_test_wav(tmpdir, "favorite_me.wav")).resolve())
+            song = Song(title="Favorite Me", artist="Artist", file_path=file_path, file_format="wav")
+            self.playlist_manager.load_playlist([song], start_index=0)
+
+            self.window._on_favorite_add_requested(0)
+            self.assertTrue(self.favorites_manager.contains_path(file_path))
+            display = self.window._playlist_widget.model.data(
+                self.window._playlist_widget.model.index(0, 0)
+            )
+            self.assertTrue(display.startswith("★ "))
+
+            self.window._on_favorite_remove_requested(0)
+            self.assertFalse(self.favorites_manager.contains_path(file_path))
+            display = self.window._playlist_widget.model.data(
+                self.window._playlist_widget.model.index(0, 0)
+            )
+            self.assertFalse(display.startswith("★ "))
+
+    def test_playing_from_favorites_switches_main_playlist(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mainwindow_favorites_") as tmpdir:
+            first = str(Path(create_test_wav(tmpdir, "one.wav")).resolve())
+            second = str(Path(create_test_wav(tmpdir, "two.wav")).resolve())
+            first_song = Song(title="One", file_path=first, file_format="wav")
+            second_song = Song(title="Two", file_path=second, file_format="wav")
+
+            self.favorites_manager.add_favorite(first_song)
+            self.favorites_manager.add_favorite(second_song)
+
+            self.window._on_favorites_play_requested(1)
+
+            self.assertEqual(self.playlist_manager.current_index, 1)
+            self.assertEqual(
+                [song.file_path for song in self.playlist_manager.playlist],
+                [first, second],
+            )
+            self.audio_engine.play.assert_called_with(second)
+
+    def test_removing_from_favorites_window_keeps_main_playlist_song(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mainwindow_favorites_") as tmpdir:
+            file_path = str(Path(create_test_wav(tmpdir, "stay.wav")).resolve())
+            song = Song(title="Stay", file_path=file_path, file_format="wav")
+
+            self.playlist_manager.load_playlist([song], start_index=0)
+            self.favorites_manager.add_favorite(song)
+
+            self.window._on_favorites_window_remove_requested(0)
+
+            self.assertEqual(len(self.playlist_manager.playlist), 1)
+            self.assertEqual(self.playlist_manager.playlist[0].file_path, file_path)
+            self.assertEqual(self.favorites_manager.favorites, [])
 
 
 if __name__ == "__main__":

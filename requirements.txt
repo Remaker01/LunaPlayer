@@ -1,13 +1,11 @@
 # SmallPlayer - Music Player
 # Core dependencies
 PySide6>=6.11
-PySide6-Essentials>=6.11
-PySide6-Addons>=6.11
 av>=17.0
 mutagen>=1.47
+httpcore>=1.0
 
-# Web UI
-fastapi>=0.138
-uvicorn>=0.49
-av>=17.0
-mutagen>=1.47
+
+# Web UI (uncomment when needed)
+# fastapi>=0.138
+# uvicorn>=0.49

@@ -14,6 +14,7 @@ Architecture
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import List, Optional
 
 from PySide6.QtCore import QMimeData, QModelIndex, Qt, QObject, QAbstractListModel, Signal, Slot
@@ -51,6 +52,7 @@ class PlaylistModel(QAbstractListModel):
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
         self._songs: List[Song] = []
+        self._favorite_paths: set[str] = set()
 
     # ------------------------------------------------------------------
     # Data access
@@ -65,6 +67,14 @@ class PlaylistModel(QAbstractListModel):
     def songs(self) -> List[Song]:
         """Return a copy of the current song list."""
         return list(self._songs)
+
+    def set_favorite_paths(self, favorite_paths: set[str]) -> None:
+        """Update the favorite-path set used for display decorations."""
+        self._favorite_paths = set(favorite_paths)
+        if self._songs:
+            top_left = self.index(0, 0)
+            bottom_right = self.index(len(self._songs) - 1, 0)
+            self.dataChanged.emit(top_left, bottom_right, [Qt.DisplayRole, Qt.ToolTipRole])
 
     def song_at(self, index: int) -> Optional[Song]:
         """Return the song at *index*, or ``None`` if out of range."""
@@ -109,9 +119,10 @@ class PlaylistModel(QAbstractListModel):
             minutes = int(song.duration) // 60
             seconds = int(song.duration) % 60
             time_str = f"{minutes}:{seconds:02d}"
+            prefix = "★ " if song.file_path in self._favorite_paths else ""
             if song.artist:
-                return f"{song.artist} – {song.title}    [{time_str}]"
-            return f"{song.title}    [{time_str}]"
+                return f"{prefix}{song.artist} – {song.title}    [{time_str}]"
+            return f"{prefix}{song.title}    [{time_str}]"
         if role == Qt.ToolTipRole:
             parts = [f"标题:   {song.title}",
                      f"艺术家: {song.artist or '未知'}"]
@@ -203,11 +214,20 @@ class PlaylistWidget(QWidget):
     clear_requested = Signal()
     order_changed = Signal(list)  # List[Song]
     info_requested = Signal(int)  # Emitted when user picks "View details"
+    favorite_add_requested = Signal(int)
+    favorite_remove_requested = Signal(int)
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        allow_playlist_removal: bool = True,
+        show_clear_action: bool = True,
+        parent: Optional[QWidget] = None,
+    ) -> None:
         super().__init__(parent)
 
         self.setWindowTitle("播放列表")
+        self._allow_playlist_removal = allow_playlist_removal
+        self._show_clear_action = show_clear_action
 
         # --- Layout ---
         layout = QVBoxLayout(self)
@@ -260,6 +280,10 @@ class PlaylistWidget(QWidget):
         """Remove all songs from the display."""
         self._model.set_songs([])
 
+    def set_favorite_paths(self, favorite_paths: set[str]) -> None:
+        """Refresh the visible favorite markers."""
+        self._model.set_favorite_paths(favorite_paths)
+
     def highlight_row(self, index: int) -> None:
         """Select and scroll to the given row index."""
         if 0 <= index < self._model.rowCount():
@@ -288,12 +312,18 @@ class PlaylistWidget(QWidget):
     def _show_context_menu(self, pos) -> None:
         """Build and show the right-click context menu."""
         index = self._view.indexAt(pos)
-        menu = QMenu(self)
+        menu = self._build_context_menu(index)
+        if not menu.actions():
+            return
+        menu.exec(self._view.viewport().mapToGlobal(pos))
 
+    def _build_context_menu(self, index: QModelIndex) -> QMenu:
+        """Create the context menu for *index* without displaying it."""
+        menu = QMenu(self)
         if index.isValid():
-            song = self._model.song_at(index.row())
-            if song:
-                # Show song name in the menu header (disabled).
+            row = index.row()
+            song = self._model.song_at(row)
+            if song is not None:
                 display = f"{song.artist or '未知'} – {song.title}"
                 header_action = QAction(display, self)
                 header_action.setEnabled(False)
@@ -301,27 +331,50 @@ class PlaylistWidget(QWidget):
                 menu.addSeparator()
 
             play_action = QAction("▶ 播放", self)
-            play_action.triggered.connect(lambda: self.play_requested.emit(index.row()))
+            play_action.triggered.connect(lambda: self.play_requested.emit(row))
             menu.addAction(play_action)
 
-            menu.addSeparator()
+            if song is not None and self._can_toggle_favorite(song):
+                favorite_action_text = (
+                    "★ 取消收藏"
+                    if song.file_path in self._model._favorite_paths
+                    else "☆ 加入收藏"
+                )
+                favorite_action = QAction(favorite_action_text, self)
+                if song.file_path in self._model._favorite_paths:
+                    favorite_action.triggered.connect(
+                        lambda: self.favorite_remove_requested.emit(row)
+                    )
+                else:
+                    favorite_action.triggered.connect(
+                        lambda: self.favorite_add_requested.emit(row)
+                    )
+                menu.addAction(favorite_action)
 
-            remove_action = QAction("🗑 从列表移除", self)
-            remove_action.triggered.connect(lambda: self._request_remove(index.row()))
-            menu.addAction(remove_action)
-
-            menu.addSeparator()
+            if self._allow_playlist_removal:
+                remove_action = QAction("🗑 从列表移除", self)
+                remove_action.triggered.connect(lambda: self._request_remove(row))
+                menu.addAction(remove_action)
 
             info_action = QAction("📋 查看详情", self)
-            info_action.triggered.connect(lambda: self.info_requested.emit(index.row()))
+            info_action.triggered.connect(lambda: self.info_requested.emit(row))
             menu.addAction(info_action)
 
-        menu.addSeparator()
-        clear_action = QAction("清空播放列表", self)
-        clear_action.triggered.connect(self.clear_requested.emit)
-        menu.addAction(clear_action)
+        if self._show_clear_action:
+            if menu.actions():
+                menu.addSeparator()
+            clear_action = QAction("清空播放列表", self)
+            clear_action.triggered.connect(self.clear_requested.emit)
+            menu.addAction(clear_action)
+        return menu
 
-        menu.exec(self._view.viewport().mapToGlobal(pos))
+    @staticmethod
+    def _can_toggle_favorite(song: Song) -> bool:
+        """Return whether *song* looks like a local-file favorite candidate."""
+        file_path = str(song.file_path or "").strip()
+        if not file_path or file_path.startswith(("http://", "https://")):
+            return False
+        return Path(file_path).suffix != ""
 
     def _request_remove(self, row: int) -> None:
         """Emit remove_requested after internal model removal."""

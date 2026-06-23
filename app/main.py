@@ -24,6 +24,7 @@ from PySide6.QtWidgets import QApplication
 
 from app.app_info import APP_NAME, APP_ORGANIZATION, APP_VERSION
 from app.core.audio_engine import AudioEngine
+from app.core.favorites_manager import FavoritesManager
 from app.core.music_scanner import MusicScanner
 from app.core.playlist_manager import PlaylistManager
 from app.ui.main_window import MainWindow
@@ -90,16 +91,22 @@ def main() -> None:
     # Audio engine (lives in main thread; spawns decoder thread internally).
     audio_engine = AudioEngine()
 
+    # Favorites manager (persistent local favorites).
+    favorites_manager = FavoritesManager()
+
     # Music scanner (owns its own QThread).
     music_scanner = MusicScanner()
 
     # -- Main Window --
     window = MainWindow(
         playlist_manager=playlist_manager,
+        favorites_manager=favorites_manager,
         audio_engine=audio_engine,
         music_scanner=music_scanner,
     )
     window.show()
+
+    favorites_manager.load_favorites()
 
     # -- Bootstrap: restore the last session's playlist or start empty. --
     restored = playlist_manager.load_from_m3u()

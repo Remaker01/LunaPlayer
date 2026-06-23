@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSlider,
+    QSizePolicy,
     QSplitter,
     QStatusBar,
     QVBoxLayout,
@@ -51,10 +52,12 @@ from PySide6.QtWidgets import (
 
 from app.app_info import about_text, window_title
 from app.core.audio_engine import AudioEngine, PlayState
+from app.core.favorites_manager import FavoritesManager
 from app.core.music_scanner import MusicScanner, SUPPORTED_EXTENSIONS
 from app.core.playlist_manager import PlaylistManager
 from app.models.song import PlayMode, Song
 from app.services.audio_metadata import extract_cover_art, extract_song_metadata
+from app.ui.favorites_window import FavoritesWindow
 from app.ui.lyrics_window import LrcParser, LyricsWindow
 from app.ui.widgets import PlaylistWidget, SearchPanel, SongInfoDialog, Settings, SettingsDialog
 from app.services.music_provider import MusicProvider
@@ -74,6 +77,8 @@ class MainWindow(QMainWindow):
     DEFAULT_HEIGHT = 700
     MIN_WIDTH = 800
     MIN_HEIGHT = 500
+    SONG_INFO_MAX_WIDTH = 320
+    PROGRESS_SLIDER_MIN_WIDTH = 180
 
     # Play mode display symbols (Chinese labels).
     _PLAY_MODE_SYMBOLS = {
@@ -83,12 +88,14 @@ class MainWindow(QMainWindow):
     }
 
     def __init__(self, playlist_manager: PlaylistManager,
+                 favorites_manager: FavoritesManager,
                  audio_engine: AudioEngine,
                  music_scanner: MusicScanner,
                  parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
 
         self._playlist_manager = playlist_manager
+        self._favorites_manager = favorites_manager
         self._audio_engine = audio_engine
         self._music_scanner = music_scanner
 
@@ -102,6 +109,7 @@ class MainWindow(QMainWindow):
         self._pending_scan_requests: list[tuple[str, bool]] = []
         self._last_position_ms: int = 0
         self._restore_selection_only: bool = False
+        self._song_info_full_text: str = "未播放"
 
         # ---- Build UI ----
         self._setup_window()
@@ -121,6 +129,7 @@ class MainWindow(QMainWindow):
         # ---- Create lyrics window (hidden by default) ----
         self._lyrics_window = LyricsWindow()
         self._lyrics_window.hide()
+        self._favorites_window = FavoritesWindow(self)
 
         # ---- Search provider ----
         self._search_provider = MusicProvider(self)
@@ -183,6 +192,11 @@ class MainWindow(QMainWindow):
         export_action.setShortcut(QKeySequence("Ctrl+E"))
         export_action.triggered.connect(self._on_export_playlist)
         file_menu.addAction(export_action)
+
+        favorites_action = QAction("打开收藏(&V)", self)
+        favorites_action.setShortcut(QKeySequence("Ctrl+D"))
+        favorites_action.triggered.connect(self._on_open_favorites)
+        file_menu.addAction(favorites_action)
 
         open_dl_action = QAction("打开下载目录(&L)", self)
         open_dl_action.triggered.connect(self._on_open_download_dir)
@@ -316,6 +330,8 @@ class MainWindow(QMainWindow):
         # Song info
         self._song_info_label = QLabel("未播放")
         self._song_info_label.setObjectName("titleLabel")
+        self._song_info_label.setMaximumWidth(self.SONG_INFO_MAX_WIDTH)
+        self._song_info_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
         progress_row.addWidget(self._song_info_label, 1)
 
         # Time labels
@@ -327,6 +343,7 @@ class MainWindow(QMainWindow):
         self._progress_slider = QSlider(Qt.Horizontal)
         self._progress_slider.setRange(0, 0)  # will be updated when duration is known
         self._progress_slider.setValue(0)
+        self._progress_slider.setMinimumWidth(self.PROGRESS_SLIDER_MIN_WIDTH)
         self._progress_slider.sliderPressed.connect(self._on_slider_pressed)
         self._progress_slider.sliderReleased.connect(self._on_slider_released)
         self._progress_slider.sliderMoved.connect(self._on_slider_moved)
@@ -449,6 +466,19 @@ class MainWindow(QMainWindow):
         self._playlist_widget.clear_requested.connect(self._on_clear_requested)
         self._playlist_widget.order_changed.connect(self._on_order_changed)
         self._playlist_widget.info_requested.connect(self._on_info_requested)
+        self._playlist_widget.favorite_add_requested.connect(self._on_favorite_add_requested)
+        self._playlist_widget.favorite_remove_requested.connect(self._on_favorite_remove_requested)
+
+        # -- FavoritesManager -> UI --
+        self._favorites_manager.favorites_loaded.connect(self._on_favorites_updated)
+        self._favorites_manager.favorites_changed.connect(self._on_favorites_updated)
+
+        # -- Favorites window --
+        self._favorites_window.play_requested.connect(self._on_favorites_play_requested)
+        self._favorites_window.remove_favorite_requested.connect(
+            self._on_favorites_window_remove_requested
+        )
+        self._favorites_window.order_changed.connect(self._on_favorites_reordered)
 
         # -- AudioEngine -> UI --
         self._audio_engine.position_changed.connect(self._on_position_changed)
@@ -483,6 +513,7 @@ class MainWindow(QMainWindow):
         """Refresh the playlist widget when the playlist is loaded."""
         songs = self._playlist_manager.playlist
         self._playlist_widget.load_songs(songs)
+        self._playlist_widget.set_favorite_paths(self._favorites_manager.favorite_paths)
         session_state = self._normalize_session_state(self._playlist_manager.session_state)
         self._restore_selection_only = (
             bool(session_state.get("current_file_path"))
@@ -498,12 +529,14 @@ class MainWindow(QMainWindow):
         """A song was added at *index* – refresh view."""
         songs = self._playlist_manager.playlist
         self._playlist_widget.load_songs(songs)
+        self._playlist_widget.set_favorite_paths(self._favorites_manager.favorite_paths)
 
     @Slot(int, object)
     def _on_song_removed(self, index: int, song: object) -> None:
         """A song was removed – refresh view."""
         songs = self._playlist_manager.playlist
         self._playlist_widget.load_songs(songs)
+        self._playlist_widget.set_favorite_paths(self._favorites_manager.favorite_paths)
 
     @Slot(object)
     def _on_current_song_changed(self, song: Optional[Song]) -> None:
@@ -574,6 +607,63 @@ class MainWindow(QMainWindow):
         if 0 <= index < len(songs):
             dialog = SongInfoDialog(songs[index], self)
             dialog.exec()
+
+    @Slot(int)
+    def _on_favorite_add_requested(self, index: int) -> None:
+        """Add the selected playlist song to favorites."""
+        songs = self._playlist_manager.playlist
+        if not 0 <= index < len(songs):
+            return
+        song = songs[index]
+        if self._favorites_manager.add_favorite(song):
+            self._favorites_manager.save_favorites()
+            self._status_label.setText(f"已收藏: {song.title}")
+        else:
+            self._status_label.setText(f"无法收藏或已存在: {song.title}")
+
+    @Slot(int)
+    def _on_favorite_remove_requested(self, index: int) -> None:
+        """Remove the selected playlist song from favorites."""
+        songs = self._playlist_manager.playlist
+        if not 0 <= index < len(songs):
+            return
+        song = songs[index]
+        if self._favorites_manager.remove_favorite_by_path(song.file_path):
+            self._favorites_manager.save_favorites()
+            self._status_label.setText(f"已取消收藏: {song.title}")
+
+    @Slot()
+    def _on_favorites_updated(self) -> None:
+        """Refresh favorite markers and keep the favorites window in sync."""
+        self._playlist_widget.set_favorite_paths(self._favorites_manager.favorite_paths)
+        self._favorites_window.load_songs(self._favorites_manager.favorites)
+
+    @Slot(int)
+    def _on_favorites_play_requested(self, index: int) -> None:
+        """Load favorites into the main player and start from *index*."""
+        favorites = self._favorites_manager.favorites
+        if not 0 <= index < len(favorites):
+            return
+        if self._audio_engine.state != PlayState.STOPPED:
+            self._audio_engine.stop()
+        self._playlist_manager.load_playlist(favorites, start_index=index)
+
+    @Slot(int)
+    def _on_favorites_window_remove_requested(self, index: int) -> None:
+        """Remove the selected song from the favorites window only."""
+        favorites = self._favorites_manager.favorites
+        if not 0 <= index < len(favorites):
+            return
+        song = favorites[index]
+        if self._favorites_manager.remove_favorite_by_path(song.file_path):
+            self._favorites_manager.save_favorites()
+            self._status_label.setText(f"已取消收藏: {song.title}")
+
+    @Slot(list)
+    def _on_favorites_reordered(self, songs: list[Song]) -> None:
+        """Persist drag-and-drop ordering from the favorites window."""
+        self._favorites_manager.reorder_favorites(songs)
+        self._favorites_manager.save_favorites()
 
     # ================================================================
     # Slots – Audio Engine
@@ -789,6 +879,11 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._status_label.setText(f"导出失败: {exc}")
             logger.error("Export error: %s", exc)
+
+    @Slot()
+    def _on_open_favorites(self) -> None:
+        """Show the dedicated favorites window."""
+        self._favorites_window.show_and_raise()
 
     # -----------------------------------------------------------------
     # Helpers
@@ -1205,11 +1300,20 @@ class MainWindow(QMainWindow):
         """Update the song info label in the playback bar."""
         if song is not None and song.title:
             if song.artist:
-                self._song_info_label.setText(f"♫  {song.artist} – {song.title}")
+                self._song_info_full_text = f"♫  {song.artist} – {song.title}"
             else:
-                self._song_info_label.setText(f"♫  {song.title}")
+                self._song_info_full_text = f"♫  {song.title}"
         else:
-            self._song_info_label.setText("未播放")
+            self._song_info_full_text = "未播放"
+        self._refresh_song_info_label()
+
+    def _refresh_song_info_label(self) -> None:
+        """Elide the playback title so it cannot crowd out the progress slider."""
+        metrics = self._song_info_label.fontMetrics()
+        available_width = max(80, self._song_info_label.width())
+        self._song_info_label.setText(
+            metrics.elidedText(self._song_info_full_text, Qt.ElideRight, available_width)
+        )
 
     def _format_time(self, ms: int) -> str:
         """Convert milliseconds to 'm:ss' format."""
@@ -1217,6 +1321,11 @@ class MainWindow(QMainWindow):
         minutes = seconds // 60
         secs = seconds % 60
         return f"{minutes}:{secs:02d}"
+
+    def resizeEvent(self, event) -> None:
+        """Keep the title elision in sync with the current playback-bar width."""
+        super().resizeEvent(event)
+        self._refresh_song_info_label()
 
     # ------------------------------------------------------------------
     # Global shortcuts (QShortcut — works regardless of focus widget)
@@ -1269,7 +1378,9 @@ class MainWindow(QMainWindow):
         """Save playlist state and clean up on window close."""
         self._playlist_manager.set_session_state(self._build_session_state())
         self._playlist_manager.save_to_m3u()
+        self._favorites_manager.save_favorites()
 
         self._audio_engine.stop()
+        self._favorites_window.close()
         self._lyrics_window.close()
         super().closeEvent(event)
