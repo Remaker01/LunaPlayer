@@ -17,7 +17,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List, Optional
 
-from PySide6.QtCore import QMimeData, QModelIndex, Qt, QObject, QAbstractListModel, Signal, Slot
+from PySide6.QtCore import QItemSelectionModel, QMimeData, QModelIndex, Qt, QObject, QAbstractListModel, Signal, Slot
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -211,6 +211,7 @@ class PlaylistWidget(QWidget):
 
     play_requested = Signal(int)
     remove_requested = Signal(int)
+    batch_remove_requested = Signal(list)  # list[int]
     clear_requested = Signal()
     order_changed = Signal(list)  # List[Song]
     info_requested = Signal(int)  # Emitted when user picks "View details"
@@ -240,7 +241,7 @@ class PlaylistWidget(QWidget):
         # --- View ---
         self._view = QListView()
         self._view.setModel(self._model)
-        self._view.setSelectionMode(QAbstractItemView.SingleSelection)
+        self._view.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._view.setDragDropMode(QAbstractItemView.InternalMove)
         self._view.setDefaultDropAction(Qt.MoveAction)
         self._view.setAlternatingRowColors(True)
@@ -285,9 +286,11 @@ class PlaylistWidget(QWidget):
         self._model.set_favorite_paths(favorite_paths)
 
     def highlight_row(self, index: int) -> None:
-        """Select and scroll to the given row index."""
+        """Select and scroll to the given row index (clears any multi-selection)."""
         if 0 <= index < self._model.rowCount():
             idx = self._model.index(index, 0)
+            sel_model = self._view.selectionModel()
+            sel_model.select(idx, QItemSelectionModel.ClearAndSelect)
             self._view.setCurrentIndex(idx)
             self._view.scrollTo(idx)
 
@@ -309,57 +312,102 @@ class PlaylistWidget(QWidget):
         if index.isValid():
             self.play_requested.emit(index.row())
 
+    def selected_indices(self) -> List[int]:
+        """Return the row indices of all currently selected items, sorted."""
+        return sorted(
+            idx.row() for idx in self._view.selectionModel().selectedIndexes()
+            if idx.isValid()
+        )
+
     def _show_context_menu(self, pos) -> None:
-        """Build and show the right-click context menu."""
+        """Build and show the right-click context menu.
+
+        If the right-clicked item is already part of the current selection
+        the menu operates on **all** selected rows.  Otherwise the clicked
+        item is selected exclusively before showing the menu.
+        """
         index = self._view.indexAt(pos)
-        menu = self._build_context_menu(index)
+
+        # When right-clicking on a valid item that is not yet selected,
+        # select it exclusively so the menu operates on a predictable set.
+        if index.isValid():
+            sel_model = self._view.selectionModel()
+            if not sel_model.isSelected(index):
+                sel_model.select(index,
+                                 QItemSelectionModel.ClearAndSelect)
+
+        rows = self.selected_indices()
+        if not rows:
+            # Right-click on empty area — playlist-level actions only.
+            menu = QMenu(self)
+            if self._show_clear_action:
+                clear_action = QAction("清空播放列表", self)
+                clear_action.triggered.connect(self.clear_requested.emit)
+                menu.addAction(clear_action)
+            if menu.actions():
+                menu.exec(self._view.viewport().mapToGlobal(pos))
+            return
+
+        menu = self._build_context_menu(rows)
         if not menu.actions():
             return
         menu.exec(self._view.viewport().mapToGlobal(pos))
 
-    def _build_context_menu(self, index: QModelIndex) -> QMenu:
-        """Create the context menu for *index* without displaying it."""
+    def _build_context_menu(self, rows: List[int]) -> QMenu:
+        """Create the context menu for the given row indices."""
         menu = QMenu(self)
-        if index.isValid():
-            row = index.row()
-            song = self._model.song_at(row)
-            if song is not None:
-                display = f"{song.artist or '未知'} – {song.title}"
-                header_action = QAction(display, self)
-                header_action.setEnabled(False)
-                menu.addAction(header_action)
-                menu.addSeparator()
+        first_row = rows[0]
+        first_song = self._model.song_at(first_row)
+        is_multi = len(rows) > 1
 
-            play_action = QAction("▶ 播放", self)
-            play_action.triggered.connect(lambda: self.play_requested.emit(row))
-            menu.addAction(play_action)
+        # Header (single selection only)
+        if first_song is not None and not is_multi:
+            display = f"{first_song.artist or '未知'} – {first_song.title}"
+            header_action = QAction(display, self)
+            header_action.setEnabled(False)
+            menu.addAction(header_action)
+            menu.addSeparator()
 
-            if song is not None and self._can_toggle_favorite(song):
-                favorite_action_text = (
-                    "★ 取消收藏"
-                    if song.file_path in self._model._favorite_paths
-                    else "☆ 加入收藏"
-                )
-                favorite_action = QAction(favorite_action_text, self)
-                if song.file_path in self._model._favorite_paths:
-                    favorite_action.triggered.connect(
-                        lambda: self.favorite_remove_requested.emit(row)
-                    )
-                else:
-                    favorite_action.triggered.connect(
-                        lambda: self.favorite_add_requested.emit(row)
-                    )
-                menu.addAction(favorite_action)
+        # Play
+        play_text = "▶ 播放"
+        if is_multi and first_song is not None:
+            play_text = f"▶ 播放 ({first_song.artist or '未知'} – {first_song.title})"
+        play_action = QAction(play_text, self)
+        play_action.triggered.connect(lambda: self.play_requested.emit(first_row))
+        menu.addAction(play_action)
 
-            if self._allow_playlist_removal:
+        # Favorite toggle (single selection only)
+        if not is_multi and first_song is not None and self._can_toggle_favorite(first_song):
+            is_fav = first_song.file_path in self._model._favorite_paths
+            fav_text = "★ 取消收藏" if is_fav else "☆ 加入收藏"
+            fav_action = QAction(fav_text, self)
+            if is_fav:
+                fav_action.triggered.connect(
+                    lambda: self.favorite_remove_requested.emit(first_row))
+            else:
+                fav_action.triggered.connect(
+                    lambda: self.favorite_add_requested.emit(first_row))
+            menu.addAction(fav_action)
+
+        # Remove
+        if self._allow_playlist_removal:
+            if is_multi:
+                remove_action = QAction(f"🗑 从列表移除 ({len(rows)} 首)", self)
+                remove_action.triggered.connect(
+                    lambda: self.batch_remove_requested.emit(rows))
+            else:
                 remove_action = QAction("🗑 从列表移除", self)
-                remove_action.triggered.connect(lambda: self._request_remove(row))
-                menu.addAction(remove_action)
+                remove_action.triggered.connect(
+                    lambda: self._request_remove(first_row))
+            menu.addAction(remove_action)
 
+        # Info (single selection only)
+        if not is_multi:
             info_action = QAction("📋 查看详情", self)
-            info_action.triggered.connect(lambda: self.info_requested.emit(row))
+            info_action.triggered.connect(lambda: self.info_requested.emit(first_row))
             menu.addAction(info_action)
 
+        # Clear playlist
         if self._show_clear_action:
             if menu.actions():
                 menu.addSeparator()

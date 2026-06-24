@@ -37,15 +37,14 @@ class TestPlaylistWidget(unittest.TestCase):
     def test_context_menu_toggles_favorite_action_text(self) -> None:
         widget = PlaylistWidget()
         widget.load_songs(SAMPLE_SONGS)
-        index = widget.model.index(0, 0)
 
-        add_menu = widget._build_context_menu(index)
+        add_menu = widget._build_context_menu([0])
         add_texts = [action.text() for action in add_menu.actions() if action.text()]
         self.assertIn("☆ 加入收藏", add_texts)
         self.assertNotIn("★ 取消收藏", add_texts)
 
         widget.set_favorite_paths({SAMPLE_SONGS[0].file_path})
-        remove_menu = widget._build_context_menu(index)
+        remove_menu = widget._build_context_menu([0])
         remove_texts = [action.text() for action in remove_menu.actions() if action.text()]
         self.assertIn("★ 取消收藏", remove_texts)
 
@@ -61,7 +60,7 @@ class TestPlaylistWidget(unittest.TestCase):
         )
         widget.load_songs(remote_song)
 
-        menu = widget._build_context_menu(widget.model.index(0, 0))
+        menu = widget._build_context_menu([0])
         texts = [action.text() for action in menu.actions() if action.text()]
 
         self.assertNotIn("☆ 加入收藏", texts)

@@ -463,6 +463,7 @@ class MainWindow(QMainWindow):
         # -- PlaylistWidget -> PlaylistManager --
         self._playlist_widget.play_requested.connect(self._on_play_requested)
         self._playlist_widget.remove_requested.connect(self._on_remove_requested)
+        self._playlist_widget.batch_remove_requested.connect(self._on_batch_remove_requested)
         self._playlist_widget.clear_requested.connect(self._on_clear_requested)
         self._playlist_widget.order_changed.connect(self._on_order_changed)
         self._playlist_widget.info_requested.connect(self._on_info_requested)
@@ -589,6 +590,16 @@ class MainWindow(QMainWindow):
     def _on_remove_requested(self, index: int) -> None:
         """Remove the song at *index* from the playlist."""
         self._playlist_manager.remove_song(index)
+
+    @Slot(list)
+    def _on_batch_remove_requested(self, indices: list[int]) -> None:
+        """Remove multiple songs from the playlist.
+
+        Indices are processed in descending order so that earlier
+        removals do not shift the positions of later ones.
+        """
+        for index in sorted(indices, reverse=True):
+            self._playlist_manager.remove_song(index)
 
     @Slot()
     def _on_clear_requested(self) -> None:
