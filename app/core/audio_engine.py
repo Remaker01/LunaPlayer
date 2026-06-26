@@ -583,9 +583,16 @@ class AudioEngine(QObject):
         self._set_state(PlayState.STOPPED)
 
     def seek(self, position_ms: int) -> None:
-        """Seek to *position_ms* in the current file."""
+        """Seek to *position_ms* in the current file.
+
+        Preserves the paused/playing state — if the engine was paused
+        when seek is called the sink is re-suspended after restart so
+        that a slider drag does not unexpectedly resume playback.
+        """
         if position_ms < 0:
             position_ms = 0
+        was_paused = (self._state == PlayState.PAUSED)
+
         if self._decoder is not None:
             self._decoder.request_seek(position_ms)
         # Stop and restart the sink so it is in a clean Started state
@@ -598,6 +605,10 @@ class AudioEngine(QObject):
             self._sink_device = self._sink.start()
         # After restart, processedUSecs() returns 0, so we offset it.
         self._seek_offset = position_ms
+
+        # Re-apply pause if the engine was paused before the seek.
+        if was_paused and self._sink is not None:
+            self._sink.suspend()
 
     def set_volume(self, volume: float) -> None:
         """Set output volume (0.0 … 1.0)."""

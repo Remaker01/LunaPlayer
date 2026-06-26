@@ -70,6 +70,12 @@ set -- \
     --windows-console-mode=disable \
     --include-data-dir=resources=resources \
     --windows-icon-from-ico=resources/icon.ico \
+    --product-name=LunaPlayer \
+    --company-name=LunaPlayer \
+    --file-description="LunaPlayer - 音乐播放器" \
+    --file-version=1.0.0.0 \
+    --product-version=1.0.0.0 \
+    --output-filename=LunaPlayer.exe \
     "--output-dir=$OUTPUT_DIR"
 
 if [ "$KEEP_BUILD_DIR" -eq 0 ]; then
@@ -93,4 +99,4 @@ fi
 
 echo
 echo "Build completed successfully."
-echo "Executable: $DIST_DIR/main.exe"
+echo "Executable: $DIST_DIR/LunaPlayer.exe"

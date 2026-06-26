@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [string]$CondaEnv = "smallplayer",
     [string]$OutputDir = "dist\nuitka-fixed",
@@ -44,6 +44,12 @@ $arguments = @(
     "--windows-console-mode=disable",
     "--include-data-dir=resources=resources",
     "--windows-icon-from-ico=resources\icon.ico",
+    "--product-name=LunaPlayer",
+    "--company-name=LunaPlayer",
+    "--file-description=LunaPlayer - 音乐播放器",
+    "--file-version=1.0.0.0",
+    "--product-version=1.0.0.0",
+    "--output-filename=LunaPlayer.exe",
     "--output-dir=$OutputDir"
 )
 
@@ -74,7 +80,7 @@ try {
 
     Write-Host ""
     Write-Host "Build completed successfully."
-    Write-Host "Executable: $(Join-Path $distDir 'main.exe')"
+    Write-Host "Executable: $(Join-Path $distDir 'LunaPlayer.exe')"
 }
 finally {
     if ($null -eq $previousCacheDir) {
