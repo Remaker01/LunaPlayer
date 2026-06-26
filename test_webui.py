@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-SmallPlayer – Web-based test interface (FastAPI).
+LunaPlayer – Web-based test interface (FastAPI).
 
 Usage
 -----
@@ -33,10 +33,9 @@ if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 
 from app.core.audio_engine import AudioEngine, PlayState
-from app.core.music_scanner import MusicScanner
+from app.core.music_scanner import SUPPORTED_EXTENSIONS, extract_metadata
 from app.core.playlist_manager import PlaylistManager
-from app.models.database import DatabaseManager
-from app.models.song import PlayMode
+from app.models.song import PlayMode, Song
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -51,7 +50,6 @@ PLAY_MODE_NAMES = {
     PlayMode.SEQUENTIAL: "sequential",
     PlayMode.LOOP: "loop",
     PlayMode.SINGLE_LOOP: "single-loop",
-    PlayMode.SHUFFLE: "shuffle",
 }
 MODE_NAME_TO_ENUM = {v: k for k, v in PLAY_MODE_NAMES.items()}
 STATE_NAMES = {0: "stopped", 1: "playing", 2: "paused"}
@@ -80,7 +78,7 @@ _scanning: bool = False
 # FastAPI app
 # ===================================================================
 
-app = FastAPI(title="SmallPlayer")
+app = FastAPI(title="LunaPlayer")
 
 WEBUI_DIR = _PROJECT_ROOT / "test_webui"
 
@@ -160,16 +158,11 @@ def _save_config() -> None:
 # Qt backend
 # ===================================================================
 
-class SmallPlayerBackend:
+class LunaPlayerBackend:
     """Wires core modules and bridges HTTP requests to the Qt main thread."""
 
     def __init__(self, cli_music_dir: Optional[str] = None) -> None:
         self._app = QCoreApplication.instance() or QCoreApplication([])
-
-        # Database (always in project root for portability).
-        db_path = str(_PROJECT_ROOT / ".smallplayer.db")
-        self._db = DatabaseManager(db_path)
-        self._db.connect(check_same_thread=False)
 
         # Playlist
         self._playlist = PlaylistManager()
@@ -263,9 +256,23 @@ class SmallPlayerBackend:
         if not music_dir or not os.path.isdir(music_dir):
             return
         _scanning = True
-        scanner = MusicScanner(self._db)
-        scanner.scan_finished.connect(lambda n: setattr(self, "_scan_done", n))
-        scanner.scan_directory(music_dir)
+        songs: list[Song] = []
+        seen_paths: set[str] = set()
+        for root, _dirs, files in os.walk(music_dir):
+            for name in files:
+                if Path(name).suffix.lower() not in SUPPORTED_EXTENSIONS:
+                    continue
+                file_path = str((Path(root) / name).resolve())
+                if file_path in seen_paths:
+                    continue
+                song = extract_metadata(file_path)
+                if song is None:
+                    continue
+                seen_paths.add(file_path)
+                songs.append(song)
+
+        self._playlist.load_playlist(songs, start_index=0 if songs else -1)
+        setattr(self, "_scan_done", len(songs))
 
     def _do_play(self, arg: str) -> None:
         if arg:
@@ -273,7 +280,7 @@ class SmallPlayerBackend:
                 idx = int(arg)
             except ValueError:
                 return
-            songs = self._db.get_all_songs()
+            songs = self._playlist.playlist
             if 0 <= idx < len(songs):
                 self._playlist.load_playlist(songs, start_index=idx)
                 self._play_current()
@@ -290,7 +297,7 @@ class SmallPlayerBackend:
         self._engine.play(song.file_path)
 
     def _refresh_song_list(self) -> None:
-        songs = self._db.get_all_songs()
+        songs = self._playlist.playlist
         status["songs"] = [
             {"id": s.id, "title": s.title, "artist": s.artist,
              "album": s.album, "duration": s.duration}
@@ -343,7 +350,7 @@ class SmallPlayerBackend:
         t = Thread(target=server.run, daemon=True)
         t.start()
 
-        print(f"[SmallPlayer]  http://localhost:{PORT}")
+        print(f"[LunaPlayer]  http://localhost:{PORT}")
         if status.get("music_dir"):
             print(f"  Music dir: {status['music_dir']}")
         else:
@@ -360,7 +367,6 @@ class SmallPlayerBackend:
             server.should_exit = True
             t.join(timeout=3)
             self._engine.stop()
-            self._db.close()
             print("\nBye!")
 
 
@@ -375,7 +381,7 @@ def main() -> None:
         print("Starting without a music directory. Set it in the web UI.")
         cli_dir = None
 
-    SmallPlayerBackend(cli_dir).run()
+    LunaPlayerBackend(cli_dir).run()
 
 
 if __name__ == "__main__":

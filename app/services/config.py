@@ -1,18 +1,18 @@
-"""Simple JSON config stored in ``~/.smallplayer/config.json``."""
+"""Simple JSON config stored in ``~/.lunaplayer/config.json``."""
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
-_CONFIG_PATH = Path.home() / ".smallplayer" / "config.json"
+from app.paths import config_path
 
 
 def get(key: str, default: Any = None) -> Any:
     """Read a config value."""
+    path = config_path()
     try:
-        data = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
         return data.get(key, default)
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return default
@@ -20,10 +20,11 @@ def get(key: str, default: Any = None) -> Any:
 
 def set(key: str, value: Any) -> None:
     """Write a config value (creates the file if needed)."""
+    path = config_path()
     try:
-        data = json.loads(_CONFIG_PATH.read_text(encoding="utf-8"))
+        data = json.loads(path.read_text(encoding="utf-8"))
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         data = {}
     data[key] = value
-    _CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-    _CONFIG_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")

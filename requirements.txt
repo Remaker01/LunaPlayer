@@ -1,4 +1,4 @@
-# SmallPlayer - Music Player
+# LunaPlayer - Music Player
 # Core dependencies
 PySide6>=6.11
 av>=17.0

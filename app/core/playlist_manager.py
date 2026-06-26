@@ -14,6 +14,7 @@ from typing import List, Optional
 from PySide6.QtCore import QObject, Signal
 
 from app.models.song import PlayMode, Song
+from app.paths import playlists_dir
 
 logger = logging.getLogger(__name__)
 
@@ -26,10 +27,8 @@ CURRENT_PLAYLIST_NAME = "current"
 
 
 def _playlists_dir() -> Path:
-    """Return the ``~/.smallplayer/playlists/`` directory, creating it if needed."""
-    d = Path.home() / ".smallplayer" / PLAYLIST_DIR_NAME
-    d.mkdir(parents=True, exist_ok=True)
-    return d
+    """Return the ``~/.lunaplayer/playlists/`` directory, creating it if needed."""
+    return playlists_dir()
 
 
 class PlaylistManager(QObject):
@@ -315,7 +314,7 @@ class PlaylistManager(QObject):
         """
         import json
 
-        base = Path.home() / ".smallplayer" / PLAYLIST_DIR_NAME / name
+        base = _playlists_dir() / name
         m3u_path = base.with_suffix(".m3u8")
         meta_path = base.with_suffix(".meta.json")
 

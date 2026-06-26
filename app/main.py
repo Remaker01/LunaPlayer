@@ -1,5 +1,5 @@
 """
-Application entry point for SmallPlayer.
+Application entry point for LunaPlayer.
 
 Initialises the Qt application, loads the stylesheet, creates all core
 modules (AudioEngine, PlaylistManager, MusicScanner),
@@ -111,7 +111,7 @@ def main() -> None:
     # -- Bootstrap: restore the last session's playlist or start empty. --
     restored = playlist_manager.load_from_m3u()
     if restored:
-        logger.info("Restored playlist from ~/.smallplayer/playlists/current.m3u8")
+        logger.info("Restored playlist from ~/.lunaplayer/playlists/current.m3u8")
     else:
         logger.info("No saved playlist – starting with an empty queue.")
 

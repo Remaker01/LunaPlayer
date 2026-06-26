@@ -153,24 +153,24 @@ class PlaylistModel(QAbstractListModel):
         return default_flags | Qt.ItemIsDropEnabled
 
     def mimeTypes(self):
-        return ["application/x-smallplayer-song-index"]
+        return ["application/x-lunaplayer-song-index"]
 
     def mimeData(self, indexes):
         mime = QMimeData()
         # Encode the row index as a simple integer string.
         if indexes:
             row = indexes[0].row()
-            mime.setData("application/x-smallplayer-song-index",
+            mime.setData("application/x-lunaplayer-song-index",
                          str(row).encode("utf-8"))
         return mime
 
     def dropMimeData(self, data, action, row, column, parent):
         if action == Qt.IgnoreAction:
             return True
-        if not data.hasFormat("application/x-smallplayer-song-index"):
+        if not data.hasFormat("application/x-lunaplayer-song-index"):
             return False
 
-        source_row = int(bytes(data.data("application/x-smallplayer-song-index")).decode("utf-8"))
+        source_row = int(bytes(data.data("application/x-lunaplayer-song-index")).decode("utf-8"))
 
         # Determine the destination row.
         if parent.isValid():

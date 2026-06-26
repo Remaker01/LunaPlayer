@@ -1,6 +1,6 @@
-# SmallPlayer
+# LunaPlayer
 
-SmallPlayer 是一个基于 Python 和 PySide6 的本地音乐播放器。
+LunaPlayer 是一个基于 Python 和 PySide6 的本地音乐播放器。
 
 ## 功能概览
 
@@ -48,7 +48,7 @@ SmallPlayer 是一个基于 Python 和 PySide6 的本地音乐播放器。
 ### 1. 进入项目目录
 
 ```powershell
-cd D:\codes\SmallPlayer
+cd /path/to/LunaPlayer
 ```
 
 ### 2. 启动应用

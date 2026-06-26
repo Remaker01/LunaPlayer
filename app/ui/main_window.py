@@ -50,12 +50,13 @@ from PySide6.QtWidgets import (
     QMenu,
 )
 
-from app.app_info import about_text, window_title
+from app.app_info import about_text, about_title, window_title
 from app.core.audio_engine import AudioEngine, PlayState
 from app.core.favorites_manager import FavoritesManager
 from app.core.music_scanner import MusicScanner, SUPPORTED_EXTENSIONS
 from app.core.playlist_manager import PlaylistManager
 from app.models.song import PlayMode, Song
+from app.paths import default_download_dir
 from app.services.audio_metadata import extract_cover_art, extract_song_metadata
 from app.ui.favorites_window import FavoritesWindow
 from app.ui.lyrics_window import LrcParser, LyricsWindow
@@ -134,8 +135,7 @@ class MainWindow(QMainWindow):
         # ---- Search provider ----
         self._search_provider = MusicProvider(self)
         self._search_panel.set_search_provider(self._search_provider)
-        self._download_dir: str = cfg.get("download_dir",
-                                          str(Path.home() / "Music" / "SmallPlayer"))
+        self._download_dir: str = cfg.get("download_dir", str(default_download_dir()))
         self._active_downloads: int = 0
 
         # ---- Global shortcuts ----
@@ -251,7 +251,7 @@ class MainWindow(QMainWindow):
         # -- Help menu --
         help_menu = menu_bar.addMenu("帮助(&H)")
 
-        about_action = QAction("关于 SmallPlayer(&A)", self)
+        about_action = QAction(f"{about_title}(&A)", self)
         about_action.triggered.connect(self._on_show_about)
         help_menu.addAction(about_action)
 
@@ -1073,7 +1073,7 @@ class MainWindow(QMainWindow):
     @Slot()
     def _on_show_about(self) -> None:
         """Show the About dialog."""
-        QMessageBox.about(self, "关于 SmallPlayer", about_text())
+        QMessageBox.about(self, about_title, about_text())
 
     def _apply_saved_settings(self) -> None:
         """Load persisted settings and apply them to the UI."""

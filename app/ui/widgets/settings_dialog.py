@@ -1,13 +1,12 @@
 """
-SettingsDialog – unified settings window for SmallPlayer.
+SettingsDialog – unified settings window for LunaPlayer.
 
-Settings are persisted to ``~/.smallplayer/config.json`` via
+Settings are persisted to ``~/.lunaplayer/config.json`` via
 :mod:`app.services.config` and applied immediately on "OK".
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Slot
@@ -27,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from app.models.song import PlayMode
+from app.paths import default_download_dir
 import app.services.config as cfg
 
 # ---------------------------------------------------------------------------
@@ -38,7 +38,7 @@ KEY_LYRICS_FONT_SIZE = "lyrics_font_size"
 KEY_DEFAULT_PLAY_MODE = "default_play_mode"
 KEY_VOLUME = "volume"
 
-_DEFAULT_DOWNLOAD_DIR = str(Path.home() / "Music" / "SmallPlayer")
+_DEFAULT_DOWNLOAD_DIR = str(default_download_dir())
 _DEFAULT_FONT_SIZE = 22
 _DEFAULT_VOLUME = 80
 

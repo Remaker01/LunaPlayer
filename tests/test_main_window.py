@@ -5,8 +5,9 @@ from __future__ import annotations
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
+from app.app_info import APP_NAME, window_title
 from app.core.audio_engine import AudioEngine
 from app.core.favorites_manager import FavoritesManager
 from app.core.music_scanner import MusicScanner
@@ -33,6 +34,9 @@ class TestMainWindowRestore(unittest.TestCase):
         cls._app = ensure_qapp()
 
     def setUp(self) -> None:
+        self._tmp_home = tempfile.TemporaryDirectory(prefix="lunaplayer_home_")
+        self._home_patch = patch("pathlib.Path.home", return_value=Path(self._tmp_home.name))
+        self._home_patch.start()
         self.playlist_manager = PlaylistManager()
         self.favorites_manager = FavoritesManager()
         self.favorites_manager.save_favorites = MagicMock()  # type: ignore[method-assign]
@@ -50,6 +54,8 @@ class TestMainWindowRestore(unittest.TestCase):
         self.playlist_manager.save_to_m3u = MagicMock()  # type: ignore[method-assign]
         self.window.close()
         self.audio_engine.stop()
+        self._home_patch.stop()
+        self._tmp_home.cleanup()
 
     def test_startup_restore_selects_song_without_loading_audio(self) -> None:
         with tempfile.TemporaryDirectory(prefix="mainwindow_restore_") as tmpdir:
@@ -76,6 +82,8 @@ class TestMainWindowRestore(unittest.TestCase):
             self.assertEqual(self.window._time_total.text(), "0:00")
 
     def test_song_info_area_is_bounded_to_protect_progress_slider(self) -> None:
+        self.assertEqual(self.window.windowTitle(), window_title)
+
         self.assertEqual(
             self.window._song_info_label.maximumWidth(),
             MainWindow.SONG_INFO_MAX_WIDTH,
@@ -95,6 +103,9 @@ class TestMainWindowRestore(unittest.TestCase):
 
         self.window._update_song_info(long_song)
         self.assertIn("…", self.window._song_info_label.text())
+
+    def test_about_dialog_title_uses_lunaplayer_name(self) -> None:
+        self.assertEqual(APP_NAME, "LunaPlayer")
 
     def test_favorite_add_and_remove_updates_playlist_marker(self) -> None:
         with tempfile.TemporaryDirectory(prefix="mainwindow_favorites_") as tmpdir:
