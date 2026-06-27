@@ -63,16 +63,23 @@ class _Worker(QThread):
     # signal (which fires on thread exit regardless of success/error)
     # remains available for cleanup in MusicProvider._run().
     task_done = Signal(object)                    # type varies per subclass
-    error = Signal(str)
+    error = Signal(str, str)   # (category, detail) — "network" or "server"
 
     def run_task(self) -> None: ...               # override in subclass
 
     def run(self) -> None:
         try:
             self.run_task()
+        except urllib3.exceptions.MaxRetryError:
+            logger.exception("%s failed (network)", type(self).__name__)
+            self.error.emit("network", "无法连接到服务器，请检查网络")
+        except (urllib3.exceptions.ReadTimeoutError,
+                ConnectionError, TimeoutError, OSError):
+            logger.exception("%s failed (network)", type(self).__name__)
+            self.error.emit("network", "网络连接异常，请稍后重试")
         except Exception as exc:
             logger.exception("%s failed", type(self).__name__)
-            self.error.emit(str(exc))
+            self.error.emit("server", str(exc))
 
 
 class _SearchWorker(_Worker):
@@ -92,10 +99,10 @@ class _SearchWorker(_Worker):
                                 "Referer": referer}),
             body=body)
         if resp.status != 200:
-            self.error.emit(f"HTTP {resp.status}"); return
+            self.error.emit("server", str(resp.status)); return
         payload = resp.json()
         if payload.get("code") != 200:
-            self.error.emit(payload.get("error", "?")); return
+            self.error.emit("server", payload.get("error", "?")); return
         songs = [s for item in payload.get("data", []) if (s := _build_song(item))]
         self.task_done.emit(songs)
 
@@ -114,7 +121,7 @@ class _DownloadWorker(_Worker):
             decode_content=True)
         if resp.status != 200:
             resp.release_conn()
-            self.error.emit(f"HTTP {resp.status}")
+            self.error.emit("server", f"HTTP {resp.status}")
             return
         Path(self._save_path).parent.mkdir(parents=True, exist_ok=True)
         with Path(self._save_path).open("wb") as output:
@@ -137,7 +144,7 @@ class _LyricsWorker(_Worker):
         if resp.status == 200:
             self.task_done.emit(resp.data.decode("utf-8", errors="replace"))
         else:
-            self.error.emit(f"HTTP {resp.status}")
+            self.error.emit("server", f"HTTP {resp.status}")
 
 
 # ===================================================================
@@ -148,21 +155,20 @@ class MusicProvider(QObject):
     """Search, download & lyrics.  All operations are async (QThread)."""
 
     results_ready = Signal(list)        # List[Song]
-    search_error = Signal(str)
+    search_error = Signal(str, str)   # (category, detail)
     download_ready = Signal(object, str)  # Song, local_path
     download_error = Signal(object, str)  # Song, message
     lyrics_ready = Signal(str)
-    lyrics_error = Signal(str)
+    lyrics_error = Signal(str, str)   # (category, detail)
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._workers: list[QThread] = []                     # keep GC alive
 
     def _run(self, w: QThread) -> None:
-        # QThread.finished (built-in) fires when the thread exits
-        # regardless of success or failure — ensures cleanup always runs.
-        w.finished.connect(lambda: self._workers.remove(w))
+        # Append *before* connecting finished so the lambda can safely remove.
         self._workers.append(w)
+        w.finished.connect(lambda: self._workers.remove(w))
         w.start()
 
     def search(self, keyword: str, page: int = 1,
@@ -177,11 +183,11 @@ class MusicProvider(QObject):
         path = str(Path(save_dir) / f"{safe_name}.mp3")
         w = _DownloadWorker(song.file_path, path, self)
         w.task_done.connect(lambda p: self.download_ready.emit(song, p))
-        w.error.connect(lambda m: self.download_error.emit(song, m))
+        w.error.connect(lambda cat, msg: self.download_error.emit(song, msg))
         self._run(w)
 
     def fetch_lyrics(self, lrc_url: str) -> None:
         w = _LyricsWorker(lrc_url, self)
         w.task_done.connect(self.lyrics_ready.emit)
-        w.error.connect(self.lyrics_error.emit)
+        w.error.connect(lambda cat, msg: self.lyrics_error.emit(cat, msg))
         self._run(w)

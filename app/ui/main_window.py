@@ -1033,10 +1033,15 @@ class MainWindow(QMainWindow):
         self._status_label.setText(
             f"正在下载 ({self._active_downloads} 个活跃): {song.title}…")
 
-    @Slot(str)
-    def _on_search_error(self, message: str) -> None:
-        """Display search error."""
-        self._status_label.setText(f"⚠ 搜索错误: {message}")
+    @Slot(str, str)
+    def _on_search_error(self, category: str, message: str) -> None:
+        """Display a friendly search error and update the search panel label."""
+        if category == "network":
+            friendly = "⚠ 网络连接失败，请检查网络后重试"
+        else:
+            friendly = f"⚠ 搜索服务暂时不可用 (HTTP {message})" if message.isdigit() else f"⚠ 搜索服务暂时不可用: {message}"
+        self._status_label.setText(friendly)
+        self._search_panel.display_error(friendly)
 
     @Slot(object, str)
     def _on_download_ready(self, song: Song, local_path: str) -> None:

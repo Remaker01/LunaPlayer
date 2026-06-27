@@ -195,6 +195,12 @@ class SearchPanel(QWidget):
 
         self._results_list.setCurrentRow(0)
 
+    @Slot(str)
+    def display_error(self, friendly: str) -> None:
+        """Show a friendly error message in the search panel status label."""
+        self._status_label.setText(friendly)
+        self._status_label.show()
+
     def clear_results(self) -> None:
         """Clear all search results."""
         self._results.clear()
@@ -214,7 +220,7 @@ class SearchPanel(QWidget):
         if not keyword:
             return
 
-        self._status_label.setText("正在搜索…")
+        self._status_label.setText("搜索中…")
         self._status_label.show()
         self._results_list.clear()
         self._add_btn.setEnabled(False)
