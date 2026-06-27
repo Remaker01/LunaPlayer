@@ -155,6 +155,11 @@ class SearchPanel(QWidget):
         self._download_btn.setEnabled(False)
         btn_layout.addWidget(self._download_btn)
 
+        self._clear_btn = QPushButton("清空结果")
+        self._clear_btn.clicked.connect(self.clear_results)
+        self._clear_btn.setEnabled(False)
+        btn_layout.addWidget(self._clear_btn)
+
         layout.addLayout(btn_layout)
 
         # --- State ---
@@ -183,6 +188,7 @@ class SearchPanel(QWidget):
         if not songs:
             self._status_label.setText("未找到结果")
             self._status_label.show()
+            self._clear_btn.setEnabled(False)
             return
 
         self._status_label.hide()
@@ -194,6 +200,7 @@ class SearchPanel(QWidget):
             self._results_list.setItemWidget(item, widget)
 
         self._results_list.setCurrentRow(0)
+        self._clear_btn.setEnabled(True)
 
     @Slot(str)
     def display_error(self, friendly: str) -> None:
@@ -209,6 +216,7 @@ class SearchPanel(QWidget):
         self._status_label.show()
         self._add_btn.setEnabled(False)
         self._download_btn.setEnabled(False)
+        self._clear_btn.setEnabled(False)
 
     # ------------------------------------------------------------------
     # Internal slots
@@ -225,6 +233,7 @@ class SearchPanel(QWidget):
         self._results_list.clear()
         self._add_btn.setEnabled(False)
         self._download_btn.setEnabled(False)
+        self._clear_btn.setEnabled(False)
 
         if self._search_provider is not None and hasattr(self._search_provider, "search"):
             source = self._source_combo.currentData()

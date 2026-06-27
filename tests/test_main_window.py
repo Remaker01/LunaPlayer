@@ -160,6 +160,23 @@ class TestMainWindowRestore(unittest.TestCase):
             self.assertEqual(self.playlist_manager.playlist[0].file_path, file_path)
             self.assertEqual(self.favorites_manager.favorites, [])
 
+    def test_showing_lyrics_window_loads_current_song_lyrics_immediately(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mainwindow_lyrics_") as tmpdir:
+            file_path = Path(create_test_wav(tmpdir, "lyrics.wav")).resolve()
+            file_path.with_suffix(".lrc").write_text(
+                "[00:00.00]Line one\n[00:01.00]Line two\n",
+                encoding="utf-8",
+            )
+            song = Song(title="Lyrics", artist="Artist", file_path=str(file_path), file_format="wav")
+
+            self.playlist_manager.load_playlist([song], start_index=0)
+            self.window._last_position_ms = 0
+
+            self.window._on_toggle_lyrics(True)
+
+            self.assertEqual(len(self.window._lyrics_window._lyrics), 2)
+            self.assertEqual(self.window._lyrics_window._current_line_index, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

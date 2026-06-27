@@ -962,6 +962,12 @@ class MainWindow(QMainWindow):
             # Re-position when showing.
             self._lyrics_window._move_to_bottom_center()
             self._lyrics_window.show()
+            current_song = self._playlist_manager.get_current_song()
+            if current_song is not None:
+                self._load_lyrics_for(current_song)
+                self._lyrics_window.sync_position(self._last_position_ms)
+            else:
+                self._lyrics_window.load_lyrics([])
         else:
             self._lyrics_window.hide()
 
