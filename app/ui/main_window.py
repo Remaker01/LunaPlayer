@@ -523,7 +523,11 @@ class MainWindow(QMainWindow):
         self._playlist_manager.clear_session_state()
         if not songs:
             self._reset_cover_art()
-        self._update_song_info(None)
+        # Preserve the current song label — _on_playlist_loaded is also
+        # triggered by drag-and-drop reorder, and blowing away the info
+        # text to "未播放" would be wrong while a track is still active.
+        current_song = self._playlist_manager.get_current_song()
+        self._update_song_info(current_song)
 
     @Slot(int)
     def _on_song_added(self, index: int) -> None:
@@ -541,7 +545,14 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def _on_current_song_changed(self, song: Optional[Song]) -> None:
-        """The current song changed – update UI and load into audio engine."""
+        """The current song changed – update UI and load into audio engine.
+
+        Preserves pause state so that removing / skipping the current
+        song while paused loads the new file but stays paused.
+        Explicit user requests (double-click, "Play" menu) always call
+        ``stop()`` first, so ``was_paused`` is ``False`` there and
+        playback starts normally.
+        """
         if song is not None and song.file_path:
             self._update_cover_art(song)
             if self._restore_selection_only:
@@ -552,9 +563,12 @@ class MainWindow(QMainWindow):
                 self._time_total.setText("0:00")
                 self._last_position_ms = 0
             else:
+                was_paused = (self._audio_engine.state == PlayState.PAUSED)
                 logger.info("Playing: %s - %s", song.artist, song.title)
                 self._load_lyrics_for(song)
                 self._audio_engine.play(song.file_path)
+                if was_paused:
+                    self._audio_engine.pause()
         else:
             # Song removed / playlist cleared → stop playback.
             self._audio_engine.stop()

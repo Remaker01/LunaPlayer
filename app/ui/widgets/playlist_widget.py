@@ -248,6 +248,12 @@ class PlaylistWidget(QWidget):
         self._view.setFrameShape(QFrame.NoFrame)
         self._view.setEditTriggers(QAbstractItemView.NoEditTriggers)
 
+        # Disable drag when the user has multiple items selected (our
+        # model's ``mimeData`` only encodes the first row, so multi-item
+        # drags silently drop extra items).  Re-enable on single / none.
+        self._view.selectionModel().selectionChanged.connect(
+            self._on_selection_changed)
+
         # Connect double-click -> play
         self._view.doubleClicked.connect(self._on_double_click)
 
@@ -274,7 +280,14 @@ class PlaylistWidget(QWidget):
 
     @Slot(int)
     def remove_song(self, index: int) -> None:
-        """Remove the song at *index*."""
+        """Remove the song at *index* from the **local model only**.
+
+        .. caution::
+           This method bypasses :class:`PlaylistManager` and directly
+           mutates the widget's model.  The main signal-driven flow
+           (``remove_requested`` / ``batch_remove_requested``) should be
+           preferred for keeping the manager in sync.
+        """
         self._model.remove_at(index)
 
     def clear(self) -> None:
@@ -306,6 +319,14 @@ class PlaylistWidget(QWidget):
     # ------------------------------------------------------------------
     # Internal slots
     # ------------------------------------------------------------------
+
+    def _on_selection_changed(self) -> None:
+        """Disable drag-and-drop when multiple rows are selected."""
+        n_selected = len(self._view.selectionModel().selectedIndexes())
+        if n_selected > 1:
+            self._view.setDragDropMode(QAbstractItemView.NoDragDrop)
+        else:
+            self._view.setDragDropMode(QAbstractItemView.InternalMove)
 
     def _on_double_click(self, index) -> None:
         """Handle double-click on a row – request playback."""
