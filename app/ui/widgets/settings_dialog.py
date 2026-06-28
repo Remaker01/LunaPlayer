@@ -144,7 +144,7 @@ class SettingsDialog(QDialog):
         self._font_size_spin.setRange(12, 48)
         self._font_size_spin.setSuffix(" px")
         self._font_size_spin.setValue(current.lyrics_font_size)
-        lrc_form.addRow("字体大小:", self._font_size_spin)
+        lrc_form.addRow("字体大小 (12-48 px):", self._font_size_spin)
 
         layout.addWidget(lrc_group)
 

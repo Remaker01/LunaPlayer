@@ -56,10 +56,31 @@ fi
 mkdir -p "$RESOLVED_CACHE_DIR"
 
 if [ -d "$RESOLVED_OUTPUT_DIR" ]; then
-    # Remove the previous output so the standalone folder always matches
-    # the current build inputs and does not keep stale DLLs around.
     rm -rf "$RESOLVED_OUTPUT_DIR"
 fi
+
+# ── OS-specific Nuitka options ──────────────────────────────────
+UNAME_S=$(uname -s)
+case "$UNAME_S" in
+    Linux*)
+        ICON_OPT="--linux-icon=resources/icon.png"
+        OUTPUT_FILENAME="LunaPlayer"
+        ;;
+    Darwin*)
+        ICON_OPT="--macos-app-icon=resources/icon.png"
+        OUTPUT_FILENAME="LunaPlayer"
+        ;;
+    CYGWIN*|MINGW*|MSYS*)
+        ICON_OPT="--windows-icon-from-ico=resources/icon.ico"
+        OUTPUT_FILENAME="LunaPlayer.exe"
+        WIN_EXTRA="--windows-console-mode=disable"
+        ;;
+    *)
+        ICON_OPT=""
+        OUTPUT_FILENAME="LunaPlayer"
+        WIN_EXTRA=""
+        ;;
+esac
 
 set -- \
     run -n "$CONDA_ENV" \
@@ -67,16 +88,20 @@ set -- \
     --standalone \
     --enable-plugin=pyside6 \
     --include-module=av.utils \
-    --windows-console-mode=disable \
     --include-data-dir=resources=resources \
-    --windows-icon-from-ico=resources/icon.ico \
+    $ICON_OPT \
     --product-name=LunaPlayer \
     --company-name=LunaPlayer \
     --file-description="LunaPlayer - 音乐播放器" \
     --file-version=1.0.0.0 \
     --product-version=1.0.0.0 \
-    --output-filename=LunaPlayer.exe \
+    "--output-filename=$OUTPUT_FILENAME" \
     "--output-dir=$OUTPUT_DIR"
+
+# Windows-only flags go after the base arguments.
+if [ -n "${WIN_EXTRA:-}" ]; then
+    set -- "$@" "$WIN_EXTRA"
+fi
 
 if [ "$KEEP_BUILD_DIR" -eq 0 ]; then
     set -- "$@" --remove-output
@@ -99,4 +124,4 @@ fi
 
 echo
 echo "Build completed successfully."
-echo "Executable: $DIST_DIR/LunaPlayer.exe"
+echo "Executable: $DIST_DIR/$OUTPUT_FILENAME"
