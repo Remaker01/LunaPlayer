@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import unittest
 
+from PySide6.QtCore import QEvent
+
 from app.models.song import Song
 from app.ui.widgets.search_panel import SearchPanel
 from tests.test_base import ensure_qapp
@@ -34,6 +36,17 @@ class TestSearchPanel(unittest.TestCase):
         self.assertFalse(panel._add_btn.isEnabled())
         self.assertFalse(panel._download_btn.isEnabled())
         self.assertFalse(panel._clear_btn.isEnabled())
+
+    def test_download_button_tooltip_uses_current_download_dir(self) -> None:
+        panel = SearchPanel()
+
+        panel.set_download_dir("D:/Music/Downloads")
+        self.assertEqual(panel._download_btn.toolTip(), "将下载到 D:/Music/Downloads")
+
+        panel._download_dir = "E:/Changed"
+        panel.eventFilter(panel._download_btn, QEvent(QEvent.Type.Enter))
+
+        self.assertEqual(panel._download_btn.toolTip(), "将下载到 E:/Changed")
 
 
 if __name__ == "__main__":

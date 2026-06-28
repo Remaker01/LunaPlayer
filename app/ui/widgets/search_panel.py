@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from PySide6.QtCore import Qt, Signal, Slot
+from PySide6.QtCore import QEvent, Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -153,6 +153,7 @@ class SearchPanel(QWidget):
         self._download_btn = QPushButton("⬇ 下载选中")
         self._download_btn.clicked.connect(self._on_download)
         self._download_btn.setEnabled(False)
+        self._download_btn.installEventFilter(self)
         btn_layout.addWidget(self._download_btn)
 
         self._clear_btn = QPushButton("清空结果")
@@ -165,6 +166,8 @@ class SearchPanel(QWidget):
         # --- State ---
         self._results: list[Song] = []
         self._search_provider: Any = None  # Will be set by MainWindow
+        self._download_dir: str = ""
+        self._refresh_download_tooltip()
 
         # Enable buttons when result(s) are selected.
         self._results_list.itemSelectionChanged.connect(self._on_selection_changed)
@@ -178,6 +181,17 @@ class SearchPanel(QWidget):
         """Set the search provider instance (must implement ``search`` method
         and emit ``results_ready`` / ``search_error`` signals)."""
         self._search_provider = provider
+
+    def set_download_dir(self, download_dir: str) -> None:
+        """Update the destination directory shown by the download tooltip."""
+        self._download_dir = download_dir
+        self._refresh_download_tooltip()
+
+    def eventFilter(self, watched: object, event: QEvent) -> bool:
+        """Refresh dynamic tooltips immediately before the user sees them."""
+        if watched is self._download_btn and event.type() in (QEvent.Type.Enter, QEvent.Type.ToolTip):
+            self._refresh_download_tooltip()
+        return super().eventFilter(watched, event)
 
     @Slot(list)
     def display_results(self, songs: list[Song]) -> None:
@@ -266,3 +280,8 @@ class SearchPanel(QWidget):
             row = self._results_list.row(item)
             if 0 <= row < len(self._results):
                 self.download_requested.emit(self._results[row])
+
+    def _refresh_download_tooltip(self) -> None:
+        """Keep the download destination text in sync with current settings."""
+        destination = self._download_dir or "当前下载目录"
+        self._download_btn.setToolTip(f"将下载到 {destination}")

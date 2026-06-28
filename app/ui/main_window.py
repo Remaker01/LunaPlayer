@@ -136,6 +136,7 @@ class MainWindow(QMainWindow):
         self._search_provider = MusicProvider(self)
         self._search_panel.set_search_provider(self._search_provider)
         self._download_dir: str = cfg.get("download_dir", str(default_download_dir()))
+        self._search_panel.set_download_dir(self._download_dir)
         self._active_downloads: int = 0
 
         # ---- Global shortcuts ----
@@ -1090,6 +1091,7 @@ class MainWindow(QMainWindow):
             if new_settings is None:
                 return
             self._download_dir = new_settings.download_dir
+            self._search_panel.set_download_dir(self._download_dir)
             self._lyrics_window.set_lyrics_font_size(new_settings.lyrics_font_size)
             self._volume_slider.setValue(new_settings.volume)
             self._playlist_manager.set_play_mode(new_settings.default_play_mode)
