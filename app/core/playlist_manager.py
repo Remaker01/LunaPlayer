@@ -22,7 +22,6 @@ logger = logging.getLogger(__name__)
 # Playlist directory helpers
 # ---------------------------------------------------------------------------
 
-PLAYLIST_DIR_NAME = "playlists"
 CURRENT_PLAYLIST_NAME = "current"
 
 

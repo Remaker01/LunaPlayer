@@ -1095,6 +1095,7 @@ class MainWindow(QMainWindow):
             self._lyrics_window.set_lyrics_font_size(new_settings.lyrics_font_size)
             self._volume_slider.setValue(new_settings.volume)
             self._playlist_manager.set_play_mode(new_settings.default_play_mode)
+            self._close_to_tray = new_settings.close_to_tray
             self._status_label.setText("设置已保存")
 
     @Slot()
@@ -1108,6 +1109,7 @@ class MainWindow(QMainWindow):
         self._lyrics_window.set_lyrics_font_size(saved.lyrics_font_size)
         self._volume_slider.setValue(saved.volume)
         self._playlist_manager.set_play_mode(saved.default_play_mode)
+        self._close_to_tray = saved.close_to_tray
 
     # ================================================================
     # System tray
@@ -1144,11 +1146,11 @@ class MainWindow(QMainWindow):
         tray_menu.addSeparator()
 
         quit_action = tray_menu.addAction("⏹ 退出")
-        quit_action.triggered.connect(QApplication.instance().quit)
+        quit_action.triggered.connect(self._on_tray_quit)
 
         self._tray_icon.setContextMenu(tray_menu)
 
-        # Double-click on the tray icon → play/pause.
+        # Double-click on the tray icon → show window.
         self._tray_icon.activated.connect(self._on_tray_activated)
 
         self._tray_icon.show()
@@ -1164,9 +1166,19 @@ class MainWindow(QMainWindow):
 
     @Slot(int)
     def _on_tray_activated(self, reason: int) -> None:
-        """Handle tray icon activation (double-click → play/pause)."""
+        """Handle tray icon activation (double-click → show window)."""
         if reason == QSystemTrayIcon.DoubleClick:
-            self._on_play_pause()
+            self.showNormal()
+            self.activateWindow()
+            self.raise_()
+
+    @Slot()
+    def _on_tray_quit(self) -> None:
+        """Actually quit the application (bypass close-to-tray)."""
+        self._playlist_manager.save_to_m3u()
+        self._favorites_manager.save_favorites()
+        self._audio_engine.stop()
+        QApplication.instance().quit()
 
     def dragEnterEvent(self, event) -> None:
         """Accept local audio-file and directory drops anywhere in the window."""
@@ -1413,12 +1425,21 @@ class MainWindow(QMainWindow):
     # ================================================================
 
     def closeEvent(self, event) -> None:
-        """Save playlist state and clean up on window close."""
+        """Save state; minimise to tray or quit based on user preference."""
         self._playlist_manager.set_session_state(self._build_session_state())
         self._playlist_manager.save_to_m3u()
         self._favorites_manager.save_favorites()
-
-        self._audio_engine.stop()
-        self._favorites_window.close()
         self._lyrics_window.close()
-        super().closeEvent(event)
+
+        if getattr(self, "_close_to_tray", True) and self._tray_icon is not None:
+            # Minimise to tray instead of quitting.
+            event.ignore()
+            self.hide()
+            self._tray_icon.showMessage(
+                "LunaPlayer", "播放器已最小化到系统托盘",
+                QSystemTrayIcon.Information, 2000,
+            )
+        else:
+            self._audio_engine.stop()
+            self._favorites_window.close()
+            super().closeEvent(event)

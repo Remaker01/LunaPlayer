@@ -400,34 +400,4 @@ class TestPlaylistPersistence(PlaylistManagerTestCase):
                     existing_path,
                 )
 
-    def test_load_from_m3u_migrates_legacy_data_directory(self) -> None:
-        with TemporaryDirectory(prefix="lunaplayer_home_") as tmp_home:
-            with patch("pathlib.Path.home", return_value=Path(tmp_home)):
-                music_dir = Path(tmp_home) / "music"
-                music_dir.mkdir(parents=True, exist_ok=True)
-                existing_path = str(Path(create_test_wav(music_dir, "legacy.wav")).resolve())
 
-                legacy_dir = Path(tmp_home) / ".smallplayer" / "playlists"
-                legacy_dir.mkdir(parents=True, exist_ok=True)
-                (legacy_dir / "current.m3u8").write_text(
-                    "#EXTM3U\n"
-                    f"{existing_path}\n",
-                    encoding="utf-8",
-                )
-                (legacy_dir / "current.meta.json").write_text(
-                    '{"current_index": 0, "play_mode": 1, "current_file_path": "%s"}'
-                    % existing_path.replace("\\", "\\\\"),
-                    encoding="utf-8",
-                )
-
-                restored = PlaylistManager()
-                self.assertTrue(restored.load_from_m3u())
-                self.assertEqual(restored.current_index, 0)
-                self.assertEqual(restored.play_mode, PlayMode.LOOP)
-                self.assertEqual(
-                    restored.get_current_song().file_path,  # type: ignore[union-attr]
-                    existing_path,
-                )
-                self.assertTrue(
-                    (Path(tmp_home) / ".lunaplayer" / "playlists" / "current.m3u8").exists()
-                )

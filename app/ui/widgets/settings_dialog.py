@@ -37,6 +37,7 @@ KEY_DOWNLOAD_DIR = "download_dir"
 KEY_LYRICS_FONT_SIZE = "lyrics_font_size"
 KEY_DEFAULT_PLAY_MODE = "default_play_mode"
 KEY_VOLUME = "volume"
+KEY_CLOSE_TO_TRAY = "close_to_tray"
 
 _DEFAULT_DOWNLOAD_DIR = str(default_download_dir())
 _DEFAULT_FONT_SIZE = 22
@@ -56,11 +57,13 @@ class Settings:
         lyrics_font_size: int = _DEFAULT_FONT_SIZE,
         default_play_mode: PlayMode = PlayMode.SEQUENTIAL,
         volume: int = _DEFAULT_VOLUME,
+        close_to_tray: bool = True,
     ) -> None:
         self.download_dir = download_dir
         self.lyrics_font_size = lyrics_font_size
         self.default_play_mode = default_play_mode
         self.volume = volume
+        self.close_to_tray = close_to_tray
 
     @classmethod
     def load(cls) -> Settings:
@@ -70,6 +73,7 @@ class Settings:
             lyrics_font_size=cfg.get(KEY_LYRICS_FONT_SIZE, _DEFAULT_FONT_SIZE),
             default_play_mode=PlayMode(cfg.get(KEY_DEFAULT_PLAY_MODE, PlayMode.SEQUENTIAL)),
             volume=cfg.get(KEY_VOLUME, _DEFAULT_VOLUME),
+            close_to_tray=cfg.get(KEY_CLOSE_TO_TRAY, True),
         )
 
     def save(self) -> None:
@@ -78,6 +82,7 @@ class Settings:
         cfg.set(KEY_LYRICS_FONT_SIZE, self.lyrics_font_size)
         cfg.set(KEY_DEFAULT_PLAY_MODE, int(self.default_play_mode))
         cfg.set(KEY_VOLUME, self.volume)
+        cfg.set(KEY_CLOSE_TO_TRAY, self.close_to_tray)
 
 
 # ===================================================================
@@ -148,6 +153,17 @@ class SettingsDialog(QDialog):
 
         layout.addWidget(lrc_group)
 
+        # -- Behavior --
+        beh_group = QGroupBox("行为")
+        beh_layout = QVBoxLayout(beh_group)
+
+        from PySide6.QtWidgets import QCheckBox
+        self._tray_cb = QCheckBox("关闭窗口时最小化到系统托盘")
+        self._tray_cb.setChecked(current.close_to_tray)
+        beh_layout.addWidget(self._tray_cb)
+
+        layout.addWidget(beh_group)
+
         # -- Buttons --
         buttons = QDialogButtonBox(
             QDialogButtonBox.Ok | QDialogButtonBox.Cancel,
@@ -185,6 +201,7 @@ class SettingsDialog(QDialog):
             lyrics_font_size=self._font_size_spin.value(),
             default_play_mode=self._play_mode_combo.currentData(),
             volume=self._volume_spin.value(),
+            close_to_tray=self._tray_cb.isChecked(),
         )
         self._result.save()
         self.accept()

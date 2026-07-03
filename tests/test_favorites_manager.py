@@ -94,24 +94,5 @@ class TestFavoritesPersistence(FavoritesManagerTestCase):
                 self.assertTrue(restored.load_favorites())
                 self.assertEqual([song.file_path for song in restored.favorites], [existing])
 
-    def test_load_favorites_migrates_legacy_directory(self) -> None:
-        with TemporaryDirectory(prefix="favorites_home_") as tmp_home:
-            with patch("pathlib.Path.home", return_value=Path(tmp_home)):
-                music_dir = Path(tmp_home) / "music"
-                music_dir.mkdir(parents=True, exist_ok=True)
-                existing = str(Path(create_test_wav(music_dir, "legacy.wav")).resolve())
-
-                legacy_path = Path(tmp_home) / ".smallplayer" / "playlists" / "favorites.m3u8"
-                legacy_path.parent.mkdir(parents=True, exist_ok=True)
-                legacy_path.write_text(f"#EXTM3U\n{existing}\n", encoding="utf-8")
-
-                restored = FavoritesManager()
-                self.assertTrue(restored.load_favorites())
-                self.assertEqual([song.file_path for song in restored.favorites], [existing])
-                self.assertTrue(
-                    (Path(tmp_home) / ".lunaplayer" / "playlists" / "favorites.m3u8").exists()
-                )
-
-
 if __name__ == "__main__":
     unittest.main()

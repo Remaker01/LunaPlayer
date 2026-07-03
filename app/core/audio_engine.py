@@ -387,35 +387,9 @@ class AudioDecoder(QThread):
         with QMutexLocker(self._mutex):
             return self._stop_requested
 
-    def _handle_pending_seek(self, container: av.container.Container,
-                             stream: av.stream.Stream,
-                             resampler: AudioResampler) -> bool:
-        """If a seek was requested since the last iteration, perform it.
-
-        Returns ``True`` if a seek was actually performed.
-        """
-        with QMutexLocker(self._mutex):
-            pos = self._seek_pos_ms
-            self._seek_pos_ms = -1
-
-        if pos < 0:
-            return False
-
-        try:
-            seek_ts = int((pos / 1000.0) / stream.time_base)
-            container.seek(seek_ts, stream=stream)
-            stream.codec_context.flush_buffers()
-            self._pcm_buf.clear()
-            resampler.flush()
-            logger.debug("Seeked to %d ms (timestamp %d)", pos, seek_ts)
-            return True
-        except Exception as exc:
-            logger.warning("Seek to %d ms failed: %s", pos, exc)
-            return False
-
     def _handle_pending_seek_v2(self, container: av.container.Container,
                                  stream: av.stream.Stream) -> bool:
-        """Version without resampler parameter – clears buffer on seek."""
+        """If a seek was requested since the last iteration, perform it."""
         with QMutexLocker(self._mutex):
             pos = self._seek_pos_ms
             self._seek_pos_ms = -1
