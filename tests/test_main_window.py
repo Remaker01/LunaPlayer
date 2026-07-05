@@ -177,6 +177,15 @@ class TestMainWindowRestore(unittest.TestCase):
             self.assertEqual(len(self.window._lyrics_window._lyrics), 2)
             self.assertEqual(self.window._lyrics_window._current_line_index, 0)
 
+    def test_hiding_lyrics_window_externally_clears_view_menu_checkmark(self) -> None:
+        self.window._on_toggle_lyrics(True)
+        self.assertTrue(self.window._show_lyrics_action.isChecked())
+
+        self.window._lyrics_window.hide()
+        self._app.processEvents()
+
+        self.assertFalse(self.window._show_lyrics_action.isChecked())
+
 
 if __name__ == "__main__":
     unittest.main()

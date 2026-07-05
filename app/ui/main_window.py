@@ -481,6 +481,7 @@ class MainWindow(QMainWindow):
             self._on_favorites_window_remove_requested
         )
         self._favorites_window.order_changed.connect(self._on_favorites_reordered)
+        self._lyrics_window.visibility_changed.connect(self._on_lyrics_window_visibility_changed)
 
         # -- AudioEngine -> UI --
         self._audio_engine.position_changed.connect(self._on_position_changed)
@@ -971,6 +972,12 @@ class MainWindow(QMainWindow):
                 self._lyrics_window.load_lyrics([])
         else:
             self._lyrics_window.hide()
+
+    @Slot(bool)
+    def _on_lyrics_window_visibility_changed(self, visible: bool) -> None:
+        """Keep the View menu check state in sync with the lyrics window."""
+        if self._show_lyrics_action.isChecked() != visible:
+            self._show_lyrics_action.setChecked(visible)
 
     # ================================================================
     # Slots – Music Scanner

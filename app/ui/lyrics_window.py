@@ -28,9 +28,11 @@ from PySide6.QtGui import (
     QFont,
     QFontDatabase,
     QFontMetrics,
+    QHideEvent,
     QMouseEvent,
     QPainter,
     QPen,
+    QShowEvent,
 )
 from PySide6.QtWidgets import QApplication, QMenu, QWidget
 
@@ -109,6 +111,7 @@ class LyricsWindow(QWidget):
 
     locked_changed = Signal(bool)
     font_size_changed = Signal(int)
+    visibility_changed = Signal(bool)
 
     PANEL_BG_COLOR = QColor(12, 16, 26, 150)
     PANEL_BORDER_COLOR = QColor(255, 255, 255, 28)
@@ -230,6 +233,14 @@ class LyricsWindow(QWidget):
         if event.button() == Qt.LeftButton:
             self._dragging = False
             event.accept()
+
+    def showEvent(self, event: QShowEvent) -> None:
+        super().showEvent(event)
+        self.visibility_changed.emit(True)
+
+    def hideEvent(self, event: QHideEvent) -> None:
+        super().hideEvent(event)
+        self.visibility_changed.emit(False)
 
     def contextMenuEvent(self, event) -> None:
         """Show right-click context menu."""
