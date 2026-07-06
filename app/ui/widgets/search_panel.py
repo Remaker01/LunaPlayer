@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from PySide6.QtCore import QEvent, Qt, Signal, Slot
+from PySide6.QtCore import QEvent, QSize, Qt, Signal, Slot
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -27,6 +27,7 @@ from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -44,23 +45,28 @@ class _SearchResultItem(QWidget):
     def __init__(self, song: Song, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.song = song
+        self.setObjectName("searchResultItem")
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
+        layout.setContentsMargins(8, 6, 8, 6)
+        layout.setSpacing(10)
 
         # --- Info column ---
         info_layout = QVBoxLayout()
-        info_layout.setSpacing(1)
+        info_layout.setSpacing(2)
 
         title_label = QLabel(song.title)
-        title_label.setStyleSheet("font-weight: 600; font-size: 13px;")
+        title_label.setStyleSheet("font-weight: 700; font-size: 13px; color: #F2F6F9;")
+        title_label.setWordWrap(False)
         info_layout.addWidget(title_label)
 
         subtitle = song.artist if song.artist else "<未知艺术家>"
         if song.album:
             subtitle += f" · {song.album}"
         artist_label = QLabel(subtitle)
-        artist_label.setStyleSheet("color: #a6adc8; font-size: 11px;")
+        artist_label.setStyleSheet("color: #98A6B5; font-size: 11px;")
+        artist_label.setWordWrap(False)
         info_layout.addWidget(artist_label)
 
         layout.addLayout(info_layout, 1)
@@ -69,8 +75,9 @@ class _SearchResultItem(QWidget):
         minutes = int(song.duration) // 60
         seconds = int(song.duration) % 60
         duration_label = QLabel(f"{minutes}:{seconds:02d}")
-        duration_label.setStyleSheet("color: #6c7086; font-size: 11px;")
+        duration_label.setStyleSheet("color: #7F8C9A; font-size: 11px;")
         duration_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        duration_label.setFixedWidth(48)
         layout.addWidget(duration_label)
 
         self.setLayout(layout)
@@ -89,11 +96,14 @@ class SearchPanel(QWidget):
 
     add_to_playlist_requested = Signal(object)  # Song
     download_requested = Signal(object)         # Song
+    selection_changed = Signal(object)          # Song | None
+    results_changed = Signal(int)
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, embedded: bool = True, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
 
-        self.setWindowTitle("搜索")
+        if not embedded:
+            self.setWindowTitle("搜索")
 
         # --- Layout ---
         layout = QVBoxLayout(self)
@@ -116,7 +126,7 @@ class SearchPanel(QWidget):
         # --- Source selector ---
         source_row = QHBoxLayout()
         source_label = QLabel("来源:")
-        source_label.setStyleSheet("font-size: 12px; color: #a6adc8;")
+        source_label.setStyleSheet("font-size: 12px; color: #98A6B5;")
         source_row.addWidget(source_label)
 
         self._source_combo = QComboBox()
@@ -129,7 +139,7 @@ class SearchPanel(QWidget):
         # --- Status / placeholder ---
         self._status_label = QLabel("输入关键词，按回车搜索")
         self._status_label.setAlignment(Qt.AlignCenter)
-        self._status_label.setStyleSheet("color: #6c7086; font-size: 12px; padding: 16px;")
+        self._status_label.setStyleSheet("color: #83909E; font-size: 12px; padding: 16px;")
         layout.addWidget(self._status_label)
 
         # --- Results list ---
@@ -187,6 +197,16 @@ class SearchPanel(QWidget):
         self._download_dir = download_dir
         self._refresh_download_tooltip()
 
+    def selected_song(self) -> Optional[Song]:
+        """Return the first selected song, or ``None`` when nothing is selected."""
+        selected = self._results_list.selectedItems()
+        if not selected:
+            return None
+        row = self._results_list.row(selected[0])
+        if 0 <= row < len(self._results):
+            return self._results[row]
+        return None
+
     def eventFilter(self, watched: object, event: QEvent) -> bool:
         """Refresh dynamic tooltips immediately before the user sees them."""
         if watched is self._download_btn and event.type() in (QEvent.Type.Enter, QEvent.Type.ToolTip):
@@ -203,18 +223,22 @@ class SearchPanel(QWidget):
             self._status_label.setText("未找到结果")
             self._status_label.show()
             self._clear_btn.setEnabled(False)
+            self.results_changed.emit(0)
+            self.selection_changed.emit(None)
             return
 
         self._status_label.hide()
         for song in songs:
             widget = _SearchResultItem(song)
             item = QListWidgetItem(self._results_list)
-            item.setSizeHint(widget.sizeHint())
             self._results_list.addItem(item)
             self._results_list.setItemWidget(item, widget)
+        self._refresh_result_item_sizes()
 
         self._results_list.setCurrentRow(0)
         self._clear_btn.setEnabled(True)
+        self.results_changed.emit(len(songs))
+        self.selection_changed.emit(self.selected_song())
 
     @Slot(str)
     def display_error(self, friendly: str) -> None:
@@ -231,6 +255,8 @@ class SearchPanel(QWidget):
         self._add_btn.setEnabled(False)
         self._download_btn.setEnabled(False)
         self._clear_btn.setEnabled(False)
+        self.results_changed.emit(0)
+        self.selection_changed.emit(None)
 
     # ------------------------------------------------------------------
     # Internal slots
@@ -260,6 +286,7 @@ class SearchPanel(QWidget):
         has_selection = len(self._results_list.selectedItems()) > 0
         self._add_btn.setEnabled(has_selection)
         self._download_btn.setEnabled(has_selection)
+        self.selection_changed.emit(self.selected_song())
 
     def _on_item_double_clicked(self, item: QListWidgetItem) -> None:
         """Double-click adds the song directly to the playlist."""
@@ -280,6 +307,22 @@ class SearchPanel(QWidget):
             row = self._results_list.row(item)
             if 0 <= row < len(self._results):
                 self.download_requested.emit(self._results[row])
+
+    def resizeEvent(self, event) -> None:
+        """Keep custom result widgets stretched to the full list width."""
+        super().resizeEvent(event)
+        self._refresh_result_item_sizes()
+
+    def _refresh_result_item_sizes(self) -> None:
+        """Update custom item widths so text can use the full results area."""
+        viewport_width = max(220, self._results_list.viewport().width() - 6)
+        for row in range(self._results_list.count()):
+            item = self._results_list.item(row)
+            widget = self._results_list.itemWidget(item)
+            if widget is None:
+                continue
+            height = max(widget.sizeHint().height(), 54)
+            item.setSizeHint(QSize(viewport_width, height))
 
     def _refresh_download_tooltip(self) -> None:
         """Keep the download destination text in sync with current settings."""

@@ -8,7 +8,7 @@ from PySide6.QtCore import QEvent
 
 from app.models.song import Song
 from app.ui.widgets.search_panel import SearchPanel
-from tests.test_base import ensure_qapp
+from tests.test_base import SignalCapture, ensure_qapp
 
 
 class TestSearchPanel(unittest.TestCase):
@@ -47,6 +47,19 @@ class TestSearchPanel(unittest.TestCase):
         panel.eventFilter(panel._download_btn, QEvent(QEvent.Type.Enter))
 
         self.assertEqual(panel._download_btn.toolTip(), "将下载到 E:/Changed")
+
+    def test_display_results_emits_count_and_selection_signals(self) -> None:
+        panel = SearchPanel()
+        songs = [
+            Song(title="One", artist="Artist", duration=10, file_path="https://example.com/1.mp3"),
+            Song(title="Two", artist="Artist", duration=12, file_path="https://example.com/2.mp3"),
+        ]
+
+        with SignalCapture(panel.results_changed) as count_capture, SignalCapture(panel.selection_changed) as selection_capture:
+            panel.display_results(songs)
+
+        self.assertEqual(count_capture[0][0], 2)
+        self.assertEqual(selection_capture[-1][0].title, "One")
 
 
 if __name__ == "__main__":
