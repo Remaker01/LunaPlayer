@@ -217,16 +217,19 @@ class PlaylistWidget(QWidget):
     info_requested = Signal(int)  # Emitted when user picks "View details"
     favorite_add_requested = Signal(int)
     favorite_remove_requested = Signal(int)
+    selection_changed = Signal(int)
 
     def __init__(
         self,
         allow_playlist_removal: bool = True,
         show_clear_action: bool = True,
+        embedded: bool = True,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
 
-        self.setWindowTitle("播放列表")
+        if not embedded:
+            self.setWindowTitle("播放列表")
         self._allow_playlist_removal = allow_playlist_removal
         self._show_clear_action = show_clear_action
 
@@ -253,6 +256,7 @@ class PlaylistWidget(QWidget):
         # drags silently drop extra items).  Re-enable on single / none.
         self._view.selectionModel().selectionChanged.connect(
             self._on_selection_changed)
+        self._view.selectionModel().currentChanged.connect(self._on_current_changed)
 
         # Connect double-click -> play
         self._view.doubleClicked.connect(self._on_double_click)
@@ -327,6 +331,12 @@ class PlaylistWidget(QWidget):
             self._view.setDragDropMode(QAbstractItemView.NoDragDrop)
         else:
             self._view.setDragDropMode(QAbstractItemView.InternalMove)
+
+    def _on_current_changed(self, current: QModelIndex, previous: QModelIndex) -> None:
+        """Expose row selection changes to container pages."""
+        del previous
+        row = current.row() if current.isValid() else -1
+        self.selection_changed.emit(row)
 
     def _on_double_click(self, index) -> None:
         """Handle double-click on a row – request playback."""

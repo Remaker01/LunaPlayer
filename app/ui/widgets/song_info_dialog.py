@@ -118,7 +118,9 @@ class SongInfoDialog(QDialog):
         self._song = song
 
         self.setWindowTitle("歌曲详情")
-        self.setMinimumWidth(420)
+        self.setObjectName("songInfoDialog")
+        self.resize(560, 520)
+        self.setMinimumWidth(520)
         self.setModal(True)
 
         self._build_ui()
@@ -129,18 +131,19 @@ class SongInfoDialog(QDialog):
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
+        layout.setContentsMargins(20, 20, 20, 16)
 
         # -- Header: title + artist --
         header = QLabel()
         header.setWordWrap(True)
-        header.setStyleSheet("font-size: 16px; font-weight: 700; padding: 4px 0;")
+        header.setObjectName("songInfoHeader")
         self._header_label = header
         layout.addWidget(header)
 
         # -- Separator --
         sep = QLabel()
+        sep.setObjectName("songInfoSeparator")
         sep.setFixedHeight(1)
-        sep.setStyleSheet("background-color: #313244;")
         layout.addWidget(sep)
 
         # -- Form with metadata rows --
@@ -171,7 +174,7 @@ class SongInfoDialog(QDialog):
             value_label.setTextInteractionFlags(
                 Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
             )
-            value_label.setStyleSheet("color: #cdd6f4;")
+            value_label.setObjectName("songInfoValue")
             form.addRow(f"{label}:", value_label)
             self._form_rows[key] = value_label
 

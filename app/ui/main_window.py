@@ -3,17 +3,18 @@ MainWindow – the primary application window.
 
 Layout
 ------
-┌──────────────────────────────────────────────────┐
-│  Menu:  File  |  Playback  |  View  |  Help      │
-├──────────────────────────┬───────────────────────┤
-│                          │                       │
-│    PlaylistWidget        │    SearchPanel        │
-│    (current queue)       │    (online search)    │
-│                          │                       │
-├──────────────────────────┴───────────────────────┤
-│ ♫ Title - Artist    ═══●═══ 3:45 / 5:30   🔊━━━●━│
-│  [⏮] [▶/⏸] [⏭] [⏹]       Mode: 🔁               │
-└──────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────┐
+│ Menu | Toolbar                                              │
+├──────────────┬──────────────────────────────────────────────┤
+│ Navigation   │ Stacked workspace pages                      │
+│ Queue        │ - Queue page                                 │
+│ Search       │ - Search page                                │
+│ Favorites    │ - Favorites page                             │
+├──────────────┴──────────────────────────────────────────────┤
+│ Artwork | current song | progress + transport | volume      │
+├─────────────────────────────────────────────────────────────┤
+│ Status bar                                                   │
+└─────────────────────────────────────────────────────────────┘
 
 Signals are used to communicate with core modules (AudioEngine,
 PlaylistManager, MusicScanner) – the MainWindow never calls core
@@ -22,28 +23,31 @@ methods directly except to wire up initial connections.
 
 from __future__ import annotations
 
+import enum
 import logging
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import QDir, Qt, Slot, QUrl
+from PySide6.QtCore import QDir, Qt, Signal, Slot, QUrl
 from PySide6.QtGui import QAction, QDesktopServices, QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
     QFileDialog,
     QFrame,
+    QFormLayout,
     QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QProgressBar,
     QPushButton,
-    QScrollArea,
     QSlider,
     QSizePolicy,
     QSplitter,
+    QStackedWidget,
     QStatusBar,
+    QToolBar,
     QVBoxLayout,
     QWidget,
     QSystemTrayIcon,
@@ -58,13 +62,177 @@ from app.core.playlist_manager import PlaylistManager
 from app.models.song import PlayMode, Song
 from app.paths import default_download_dir
 from app.services.audio_metadata import extract_cover_art, extract_song_metadata
-from app.ui.favorites_window import FavoritesWindow
 from app.ui.lyrics_window import LrcParser, LyricsWindow
 from app.ui.widgets import PlaylistWidget, SearchPanel, SongInfoDialog, Settings, SettingsDialog
 from app.services.music_provider import MusicProvider
 import app.services.config as cfg
 
 logger = logging.getLogger(__name__)
+
+
+class PageId(enum.Enum):
+    """Logical top-level pages exposed by the main workspace shell."""
+
+    QUEUE = "queue"
+    SEARCH = "search"
+    FAVORITES = "favorites"
+
+
+class _InspectorPanel(QWidget):
+    """Shared side panel that previews a selected song."""
+
+    details_requested = Signal()
+
+    def __init__(self, empty_title: str, empty_message: str, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self._empty_title = empty_title
+        self._empty_message = empty_message
+        self._cover_pixmap: Optional[QPixmap] = None
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        section_title = QLabel("检查器")
+        section_title.setObjectName("inspectorSectionTitle")
+        layout.addWidget(section_title)
+
+        self._cover_label = QLabel("♪")
+        self._cover_label.setObjectName("inspectorCover")
+        self._cover_label.setAlignment(Qt.AlignCenter)
+        self._cover_label.setMinimumSize(96, 96)
+        self._cover_label.setMaximumSize(220, 220)
+        self._cover_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        layout.addWidget(self._cover_label, 0, Qt.AlignHCenter)
+
+        self._title_label = QLabel()
+        self._title_label.setObjectName("inspectorTitle")
+        self._title_label.setWordWrap(True)
+        layout.addWidget(self._title_label)
+
+        self._subtitle_label = QLabel()
+        self._subtitle_label.setObjectName("inspectorSubtitle")
+        self._subtitle_label.setWordWrap(True)
+        layout.addWidget(self._subtitle_label)
+
+        self._favorite_label = QLabel()
+        self._favorite_label.setObjectName("inspectorFavorite")
+        layout.addWidget(self._favorite_label)
+
+        self._meta_form = QFormLayout()
+        self._meta_form.setContentsMargins(0, 8, 0, 0)
+        self._meta_form.setSpacing(8)
+        self._meta_form.setLabelAlignment(Qt.AlignLeft)
+
+        self._album_value = QLabel()
+        self._format_value = QLabel()
+        self._duration_value = QLabel()
+        self._path_value = QLabel()
+        self._path_value.setWordWrap(True)
+        self._path_value.setTextInteractionFlags(
+            Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
+        )
+
+        for label in (self._album_value, self._format_value, self._duration_value, self._path_value):
+            label.setWordWrap(True)
+
+        self._meta_form.addRow("专辑", self._album_value)
+        self._meta_form.addRow("格式", self._format_value)
+        self._meta_form.addRow("时长", self._duration_value)
+        self._meta_form.addRow("路径", self._path_value)
+        layout.addLayout(self._meta_form)
+
+        self._note_label = QLabel()
+        self._note_label.setObjectName("inspectorNote")
+        self._note_label.setWordWrap(True)
+        layout.addWidget(self._note_label)
+
+        self._details_btn = QPushButton("查看详情")
+        self._details_btn.clicked.connect(self.details_requested.emit)
+        layout.addWidget(self._details_btn)
+
+        layout.addStretch(1)
+        self.show_placeholder()
+        self._update_cover_size()
+
+    def resizeEvent(self, event) -> None:
+        """Shrink or expand artwork with the inspector panel size."""
+        super().resizeEvent(event)
+        self._update_cover_size()
+
+    def _update_cover_size(self) -> None:
+        """Keep artwork square and prevent it from crowding the text area."""
+        available_width = max(96, self.width() - 48)
+        available_height = max(96, self.height() // 3)
+        size = max(96, min(220, available_width, available_height))
+        if self._cover_label.width() != size:
+            self._cover_label.setFixedSize(size, size)
+        self._apply_cover_pixmap()
+
+    def _apply_cover_pixmap(self) -> None:
+        """Render the currently cached cover pixmap at the active size."""
+        if self._cover_pixmap is None or self._cover_pixmap.isNull():
+            self._cover_label.setPixmap(QPixmap())
+            return
+        self._cover_label.setPixmap(
+            self._cover_pixmap.scaled(
+                self._cover_label.size(),
+                Qt.KeepAspectRatioByExpanding,
+                Qt.SmoothTransformation,
+            )
+        )
+
+    def show_placeholder(self) -> None:
+        """Reset the inspector to its empty state."""
+        self._cover_pixmap = None
+        self._cover_label.setPixmap(QPixmap())
+        self._cover_label.setText("♪")
+        self._title_label.setText(self._empty_title)
+        self._subtitle_label.setText(self._empty_message)
+        self._favorite_label.setText("")
+        self._album_value.setText("—")
+        self._format_value.setText("—")
+        self._duration_value.setText("—")
+        self._path_value.setText("—")
+        self._note_label.setText("")
+        self._details_btn.setEnabled(False)
+
+    def update_song(
+        self,
+        song: Optional[Song],
+        *,
+        is_favorite: bool,
+        note: str = "",
+        allow_details: bool = True,
+    ) -> None:
+        """Render the selected song or fall back to the empty state."""
+        if song is None:
+            self.show_placeholder()
+            return
+
+        self._title_label.setText(song.title or "未知标题")
+        self._subtitle_label.setText(song.artist or "未知艺术家")
+        self._favorite_label.setText("已收藏" if is_favorite else "未收藏")
+        self._album_value.setText(song.album or "—")
+        self._format_value.setText(song.file_format.upper() if song.file_format else "—")
+        duration_seconds = int(song.duration or 0)
+        self._duration_value.setText(f"{duration_seconds // 60}:{duration_seconds % 60:02d}")
+        self._path_value.setText(song.file_path or "—")
+        self._note_label.setText(note)
+        self._details_btn.setEnabled(allow_details)
+
+        art_bytes = extract_cover_art(song.file_path) if allow_details and song.file_path else None
+        if art_bytes:
+            pixmap = QPixmap()
+            if pixmap.loadFromData(art_bytes):
+                self._cover_pixmap = pixmap
+                self._apply_cover_pixmap()
+                self._cover_label.setText("")
+                return
+
+        self._cover_pixmap = None
+        self._cover_label.setPixmap(QPixmap())
+        self._cover_label.setText("♪")
 
 
 class MainWindow(QMainWindow):
@@ -74,12 +242,13 @@ class MainWindow(QMainWindow):
     # Constants
     # ------------------------------------------------------------------
 
-    DEFAULT_WIDTH = 1100
-    DEFAULT_HEIGHT = 700
-    MIN_WIDTH = 800
-    MIN_HEIGHT = 500
-    SONG_INFO_MAX_WIDTH = 320
-    PROGRESS_SLIDER_MIN_WIDTH = 180
+    DEFAULT_WIDTH = 1280
+    DEFAULT_HEIGHT = 820
+    MIN_WIDTH = 960
+    MIN_HEIGHT = 620
+    SONG_INFO_MAX_WIDTH = 360
+    PROGRESS_SLIDER_MIN_WIDTH = 260
+    NAV_WIDTH = 188
 
     # Play mode display symbols (Chinese labels).
     _PLAY_MODE_SYMBOLS = {
@@ -111,12 +280,18 @@ class MainWindow(QMainWindow):
         self._last_position_ms: int = 0
         self._restore_selection_only: bool = False
         self._song_info_full_text: str = "未播放"
+        self._page_widgets: dict[PageId, QWidget] = {}
+        self._page_buttons: dict[PageId, QPushButton] = {}
+        self._queue_selected_index: int = -1
+        self._favorites_selected_index: int = -1
+        self._search_selected_song: Optional[Song] = None
 
         # ---- Build UI ----
         self._setup_window()
         self._create_menu_bar()
+        self._create_toolbar()
 
-        # Central wrapper: [splitter (playlist | search), playback bar]
+        # Central wrapper: [workspace shell, playback bar]
         central = QWidget()
         self.setCentralWidget(central)
         root_layout = QVBoxLayout(central)
@@ -130,7 +305,6 @@ class MainWindow(QMainWindow):
         # ---- Create lyrics window (hidden by default) ----
         self._lyrics_window = LyricsWindow()
         self._lyrics_window.hide()
-        self._favorites_window = FavoritesWindow(self)
 
         # ---- Search provider ----
         self._search_provider = MusicProvider(self)
@@ -242,6 +416,23 @@ class MainWindow(QMainWindow):
         # -- View menu --
         view_menu = menu_bar.addMenu("视图(&V)")
 
+        queue_view_action = QAction("当前队列(&Q)", self)
+        queue_view_action.setShortcut(QKeySequence("Ctrl+1"))
+        queue_view_action.triggered.connect(lambda: self.navigate_to(PageId.QUEUE))
+        view_menu.addAction(queue_view_action)
+
+        search_view_action = QAction("在线搜索(&S)", self)
+        search_view_action.setShortcut(QKeySequence("Ctrl+2"))
+        search_view_action.triggered.connect(lambda: self.navigate_to(PageId.SEARCH))
+        view_menu.addAction(search_view_action)
+
+        favorites_view_action = QAction("收藏(&F)", self)
+        favorites_view_action.setShortcut(QKeySequence("Ctrl+3"))
+        favorites_view_action.triggered.connect(lambda: self.navigate_to(PageId.FAVORITES))
+        view_menu.addAction(favorites_view_action)
+
+        view_menu.addSeparator()
+
         self._show_lyrics_action = QAction("显示歌词窗口(&L)", self)
         self._show_lyrics_action.setCheckable(True)
         self._show_lyrics_action.setChecked(False)
@@ -256,169 +447,424 @@ class MainWindow(QMainWindow):
         about_action.triggered.connect(self._on_show_about)
         help_menu.addAction(about_action)
 
+    def _create_toolbar(self) -> None:
+        """Create a compact primary toolbar for high-frequency actions."""
+        toolbar = QToolBar("主工具栏", self)
+        toolbar.setMovable(False)
+        toolbar.setFloatable(False)
+        toolbar.setObjectName("mainToolbar")
+        self.addToolBar(Qt.TopToolBarArea, toolbar)
+
+        open_dir_btn = QPushButton("打开目录")
+        open_dir_btn.setObjectName("toolbarPrimaryButton")
+        open_dir_btn.clicked.connect(self._on_open_directory)
+        toolbar.addWidget(open_dir_btn)
+
+        open_file_btn = QPushButton("打开文件")
+        open_file_btn.setObjectName("toolbarPrimaryButton")
+        open_file_btn.clicked.connect(self._on_open_files)
+        toolbar.addWidget(open_file_btn)
+
+        toolbar.addSeparator()
+
+        search_btn = QPushButton("在线搜索")
+        search_btn.setObjectName("toolbarSecondaryButton")
+        search_btn.clicked.connect(lambda: self.navigate_to(PageId.SEARCH))
+        toolbar.addWidget(search_btn)
+
+        favorites_btn = QPushButton("收藏")
+        favorites_btn.setObjectName("toolbarSecondaryButton")
+        favorites_btn.clicked.connect(lambda: self.navigate_to(PageId.FAVORITES))
+        toolbar.addWidget(favorites_btn)
+
+        toolbar.addSeparator()
+
+        settings_btn = QPushButton("设置")
+        settings_btn.setObjectName("toolbarSecondaryButton")
+        settings_btn.clicked.connect(self._on_open_settings)
+        toolbar.addWidget(settings_btn)
+
     # ---------------------------------------------------------------
-    # Central area – playlist + search
+    # Central area – navigation + pages
     # ---------------------------------------------------------------
 
     def _create_central_area(self, parent_layout: QVBoxLayout) -> None:
-        """Build the splitter layout with PlaylistWidget and SearchPanel."""
-        # Outer margin wrapper for the splitter area.
-        content = QWidget()
-        content_layout = QVBoxLayout(content)
-        content_layout.setContentsMargins(8, 4, 8, 4)
-        content_layout.setSpacing(4)
+        """Build the workspace shell with navigation and stacked pages."""
+        shell = QWidget()
+        shell.setObjectName("workspaceShell")
+        shell_layout = QHBoxLayout(shell)
+        shell_layout.setContentsMargins(12, 12, 12, 8)
+        shell_layout.setSpacing(12)
 
-        # -- Splitter --
+        self._navigation_panel = self._create_navigation()
+        shell_layout.addWidget(self._navigation_panel)
+
+        self._page_stack = QStackedWidget()
+        self._page_stack.setObjectName("pageStack")
+        shell_layout.addWidget(self._page_stack, 1)
+
+        self._create_pages()
+
+        parent_layout.addWidget(shell, 1)
+
+    def _create_navigation(self) -> QWidget:
+        """Create the fixed left navigation rail."""
+        panel = QFrame()
+        panel.setObjectName("navPanel")
+        panel.setFixedWidth(self.NAV_WIDTH)
+
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(14, 16, 14, 16)
+        layout.setSpacing(10)
+
+        app_label = QLabel("LunaPlayer")
+        app_label.setObjectName("navAppTitle")
+        layout.addWidget(app_label)
+
+        caption = QLabel("本地音乐工作台")
+        caption.setObjectName("navAppCaption")
+        layout.addWidget(caption)
+        layout.addSpacing(8)
+
+        button_specs = [
+            (PageId.QUEUE, "Ctrl+1", "当前队列"),
+            (PageId.SEARCH, "Ctrl+2", "在线搜索"),
+            (PageId.FAVORITES, "Ctrl+3", "收藏"),
+        ]
+        for page_id, shortcut_text, label in button_specs:
+            button = QPushButton(label)
+            button.setCheckable(True)
+            button.setObjectName("navButton")
+            button.setToolTip(shortcut_text)
+            button.clicked.connect(lambda checked=False, pid=page_id: self.navigate_to(pid))
+            layout.addWidget(button)
+            self._page_buttons[page_id] = button
+
+        layout.addStretch(1)
+        return panel
+
+    def _create_pages(self) -> None:
+        """Create and register all top-level workspace pages."""
+        self._create_queue_page()
+        self._create_search_page()
+        self._create_favorites_page()
+        self.navigate_to(PageId.QUEUE)
+
+    def _register_page(self, page_id: PageId, widget: QWidget) -> None:
+        """Register a page widget in the page stack."""
+        self._page_widgets[page_id] = widget
+        self._page_stack.addWidget(widget)
+
+    def _create_page_card(self) -> QFrame:
+        """Create a reusable page surface frame."""
+        card = QFrame()
+        card.setObjectName("pageCard")
+        return card
+
+    def _create_page_header(
+        self,
+        title: str,
+        subtitle: str,
+        primary_action: Optional[tuple[str, object]] = None,
+        secondary_action: Optional[tuple[str, object]] = None,
+    ) -> tuple[QWidget, QLabel]:
+        """Create a standard page header with a count badge and actions."""
+        header = QWidget()
+        layout = QHBoxLayout(header)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        text_column = QVBoxLayout()
+        text_column.setContentsMargins(0, 0, 0, 0)
+        text_column.setSpacing(4)
+
+        title_row = QHBoxLayout()
+        title_row.setContentsMargins(0, 0, 0, 0)
+        title_row.setSpacing(8)
+
+        title_label = QLabel(title)
+        title_label.setObjectName("pageTitle")
+        title_row.addWidget(title_label)
+
+        count_label = QLabel("0 首")
+        count_label.setObjectName("pageCountBadge")
+        title_row.addWidget(count_label, 0, Qt.AlignVCenter)
+        title_row.addStretch(1)
+        text_column.addLayout(title_row)
+
+        subtitle_label = QLabel(subtitle)
+        subtitle_label.setObjectName("pageSubtitle")
+        subtitle_label.setWordWrap(True)
+        text_column.addWidget(subtitle_label)
+
+        layout.addLayout(text_column, 1)
+
+        actions = QHBoxLayout()
+        actions.setSpacing(8)
+        if secondary_action is not None:
+            text, callback = secondary_action
+            button = QPushButton(text)
+            button.clicked.connect(callback)
+            actions.addWidget(button)
+        if primary_action is not None:
+            text, callback = primary_action
+            button = QPushButton(text)
+            button.setObjectName("primaryActionButton")
+            button.clicked.connect(callback)
+            actions.addWidget(button)
+        layout.addLayout(actions)
+        return header, count_label
+
+    def _create_queue_page(self) -> None:
+        """Create the queue management page."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        header, self._queue_count_label = self._create_page_header(
+            "当前队列",
+            "管理本次播放队列，保留拖拽排序和右键操作，并为未来的播放列表工作区预留结构。",
+        )
+        layout.addWidget(header)
+
         splitter = QSplitter(Qt.Horizontal)
+        splitter.setChildrenCollapsible(False)
 
-        # Left: Playlist
-        self._playlist_widget = PlaylistWidget()
-        splitter.addWidget(self._playlist_widget)
+        queue_card = self._create_page_card()
+        queue_card_layout = QVBoxLayout(queue_card)
+        queue_card_layout.setContentsMargins(12, 12, 12, 12)
+        queue_card_layout.setSpacing(8)
 
-        # Right: Search
-        search_scroll = QScrollArea()
-        search_scroll.setWidgetResizable(True)
-        search_scroll.setFrameShape(QFrame.NoFrame)
-        self._search_panel = SearchPanel()
-        search_scroll.setWidget(self._search_panel)
-        splitter.addWidget(search_scroll)
+        self._playlist_widget = PlaylistWidget(embedded=True)
+        queue_card_layout.addWidget(self._playlist_widget)
+        splitter.addWidget(queue_card)
 
-        # Set reasonable initial sizes.
-        splitter.setSizes([int(self.DEFAULT_WIDTH * 0.6),
-                           int(self.DEFAULT_WIDTH * 0.4)])
+        inspector_card = self._create_page_card()
+        inspector_layout = QVBoxLayout(inspector_card)
+        inspector_layout.setContentsMargins(12, 12, 12, 12)
+        self._queue_inspector = _InspectorPanel("选择一首歌曲", "这里会显示当前队列中歌曲的详细信息。")
+        self._queue_inspector.details_requested.connect(self._open_queue_song_details)
+        inspector_layout.addWidget(self._queue_inspector)
+        splitter.addWidget(inspector_card)
 
-        content_layout.addWidget(splitter, 1)
-        parent_layout.addWidget(content, 1)
+        splitter.setSizes([760, 320])
+        layout.addWidget(splitter, 1)
+        self._register_page(PageId.QUEUE, page)
+
+    def _create_search_page(self) -> None:
+        """Create the online search workspace page."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        header, self._search_count_label = self._create_page_header(
+            "在线搜索",
+            "将在线搜索从主分屏中独立出来，方便未来加入下载队列、来源筛选和更多结果操作。",
+        )
+        self._search_count_label.setText("0 条")
+        layout.addWidget(header)
+
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setChildrenCollapsible(False)
+
+        search_card = self._create_page_card()
+        search_card_layout = QVBoxLayout(search_card)
+        search_card_layout.setContentsMargins(12, 12, 12, 12)
+        self._search_panel = SearchPanel(embedded=True)
+        search_card_layout.addWidget(self._search_panel)
+        splitter.addWidget(search_card)
+
+        inspector_card = self._create_page_card()
+        inspector_layout = QVBoxLayout(inspector_card)
+        inspector_layout.setContentsMargins(12, 12, 12, 12)
+        self._search_inspector = _InspectorPanel("选择一条搜索结果", "这里会显示在线结果的概览信息。")
+        self._search_inspector.details_requested.connect(self._open_search_song_details)
+        inspector_layout.addWidget(self._search_inspector)
+        splitter.addWidget(inspector_card)
+
+        splitter.setSizes([760, 320])
+        layout.addWidget(splitter, 1)
+        self._register_page(PageId.SEARCH, page)
+
+    def _create_favorites_page(self) -> None:
+        """Create the favorites management page."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        header, self._favorites_count_label = self._create_page_header(
+            "收藏",
+            "收藏页现在是主工作台的一部分，方便以后扩展成更完整的本地媒体库入口。",
+        )
+        layout.addWidget(header)
+
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setChildrenCollapsible(False)
+
+        favorites_card = self._create_page_card()
+        favorites_card_layout = QVBoxLayout(favorites_card)
+        favorites_card_layout.setContentsMargins(12, 12, 12, 12)
+        self._favorites_widget = PlaylistWidget(
+            allow_playlist_removal=False,
+            show_clear_action=False,
+            embedded=True,
+        )
+        favorites_card_layout.addWidget(self._favorites_widget)
+        splitter.addWidget(favorites_card)
+
+        inspector_card = self._create_page_card()
+        inspector_layout = QVBoxLayout(inspector_card)
+        inspector_layout.setContentsMargins(12, 12, 12, 12)
+        self._favorites_inspector = _InspectorPanel("选择一首收藏歌曲", "这里会显示收藏歌曲的详细信息。")
+        self._favorites_inspector.details_requested.connect(self._open_favorite_song_details)
+        inspector_layout.addWidget(self._favorites_inspector)
+        splitter.addWidget(inspector_card)
+
+        splitter.setSizes([760, 320])
+        layout.addWidget(splitter, 1)
+        self._register_page(PageId.FAVORITES, page)
+
+    def navigate_to(self, page_id: PageId) -> None:
+        """Switch the stacked workspace to the requested page."""
+        target = self._page_widgets.get(page_id)
+        if target is None:
+            return
+        self._page_stack.setCurrentWidget(target)
+        for known_page, button in self._page_buttons.items():
+            button.setChecked(known_page == page_id)
 
     # ---------------------------------------------------------------
     # Playback control bar
     # ---------------------------------------------------------------
 
     def _create_playback_bar(self, parent_layout: QVBoxLayout) -> None:
-        """Build the bottom playback controls bar."""
+        """Build the persistent bottom playback controls bar."""
         bar = QWidget()
         bar.setObjectName("playbackBar")
-        bar.setStyleSheet("""
-            #playbackBar {
-                background-color: #181825;
-                border-top: 1px solid #313244;
-            }
-        """)
+        layout = QHBoxLayout(bar)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(18)
+        
+        left_section = QWidget()
+        left_layout = QHBoxLayout(left_section)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(0)
 
-        layout = QVBoxLayout(bar)
-        layout.setContentsMargins(8, 4, 8, 8)
-        layout.setSpacing(4)
-
-        # -- Row 0: Song info + Progress slider --
-        progress_row = QHBoxLayout()
-        progress_row.setSpacing(8)
-
-        self._cover_label = QLabel("♪")
-        self._cover_label.setAlignment(Qt.AlignCenter)
-        self._cover_label.setFixedSize(64, 64)
-        self._cover_label.setStyleSheet("""
-            QLabel {
-                background-color: #313244;
-                border: 1px solid #45475a;
-                border-radius: 6px;
-                color: #cdd6f4;
-                font-size: 22px;
-                font-weight: 700;
-            }
-        """)
-        progress_row.addWidget(self._cover_label)
-
-        # Song info
+        song_summary = QVBoxLayout()
+        song_summary.setContentsMargins(0, 0, 0, 0)
+        song_summary.setSpacing(4)
         self._song_info_label = QLabel("未播放")
         self._song_info_label.setObjectName("titleLabel")
         self._song_info_label.setMaximumWidth(self.SONG_INFO_MAX_WIDTH)
         self._song_info_label.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Preferred)
-        progress_row.addWidget(self._song_info_label, 1)
+        song_summary.addWidget(self._song_info_label)
 
-        # Time labels
+        self._song_meta_label = QLabel("等待播放")
+        self._song_meta_label.setObjectName("artistLabel")
+        self._song_meta_label.setMaximumWidth(self.SONG_INFO_MAX_WIDTH)
+        self._song_meta_label.setWordWrap(True)
+        song_summary.addWidget(self._song_meta_label)
+        left_layout.addLayout(song_summary, 1)
+        layout.addWidget(left_section, 0)
+
+        center_section = QWidget()
+        center_layout = QVBoxLayout(center_section)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        center_layout.setSpacing(8)
+
+        progress_row = QHBoxLayout()
+        progress_row.setContentsMargins(0, 0, 0, 0)
+        progress_row.setSpacing(8)
         self._time_current = QLabel("0:00")
         self._time_current.setObjectName("timeLabel")
         progress_row.addWidget(self._time_current)
 
-        # Progress slider
         self._progress_slider = QSlider(Qt.Horizontal)
-        self._progress_slider.setRange(0, 0)  # will be updated when duration is known
+        self._progress_slider.setRange(0, 0)
         self._progress_slider.setValue(0)
         self._progress_slider.setMinimumWidth(self.PROGRESS_SLIDER_MIN_WIDTH)
         self._progress_slider.sliderPressed.connect(self._on_slider_pressed)
         self._progress_slider.sliderReleased.connect(self._on_slider_released)
         self._progress_slider.sliderMoved.connect(self._on_slider_moved)
-        progress_row.addWidget(self._progress_slider, 3)
+        progress_row.addWidget(self._progress_slider, 1)
 
         self._time_total = QLabel("0:00")
         self._time_total.setObjectName("timeLabel")
         progress_row.addWidget(self._time_total)
+        center_layout.addLayout(progress_row)
 
-        # Volume
-        self._volume_slider = QSlider(Qt.Horizontal)
-        self._volume_slider.setObjectName("volumeSlider")
-        self._volume_slider.setRange(0, 100)
-        self._volume_slider.setValue(80)
-        self._volume_slider.setFixedWidth(100)
-        self._volume_slider.valueChanged.connect(self._on_volume_changed)
-        progress_row.addWidget(self._volume_slider)
-
-        self._volume_label = QLabel("80%")
-        self._volume_label.setObjectName("timeLabel")
-        self._volume_label.setFixedWidth(36)
-        progress_row.addWidget(self._volume_label)
-
-        self._volume_muted: bool = False
-        self._volume_before_mute: int = 80
-        self._mute_btn = QPushButton("🔊")
-        self._mute_btn.setFixedSize(36, 30)
-        self._mute_btn.setStyleSheet("background: transparent; border: none; font-size: 16px;")
-        self._mute_btn.clicked.connect(self._on_toggle_mute)
-        progress_row.addWidget(self._mute_btn)
-
-        layout.addLayout(progress_row)
-
-        # -- Row 1: Transport buttons + Play mode --
         transport_row = QHBoxLayout()
+        transport_row.setContentsMargins(0, 0, 0, 0)
         transport_row.setSpacing(6)
 
-        # Previous
         self._prev_btn = QPushButton("⏮")
         self._prev_btn.setObjectName("transportBtn")
         self._prev_btn.clicked.connect(self._on_previous)
         transport_row.addWidget(self._prev_btn)
 
-        # Play/Pause
         self._play_btn = QPushButton("▶")
         self._play_btn.setObjectName("transportBtn")
         self._play_btn.clicked.connect(self._on_play_pause)
         transport_row.addWidget(self._play_btn)
 
-        # Stop
         self._stop_btn = QPushButton("⏹")
         self._stop_btn.setObjectName("transportBtn")
         self._stop_btn.clicked.connect(self._on_stop)
         transport_row.addWidget(self._stop_btn)
 
-        # Next
         self._next_btn = QPushButton("⏭")
         self._next_btn.setObjectName("transportBtn")
         self._next_btn.clicked.connect(self._on_next)
         transport_row.addWidget(self._next_btn)
 
-        # Spacer
         transport_row.addStretch(1)
-
-        # Play mode button
         self._mode_btn = QPushButton()
         self._mode_btn.clicked.connect(self._on_cycle_play_mode)
-        # Init text from the current play mode, since the signal may not
-        # fire on startup (the mode hasn't *changed* yet).
         self._refresh_mode_btn()
         transport_row.addWidget(self._mode_btn)
 
-        layout.addLayout(transport_row)
+        center_layout.addLayout(transport_row)
+        layout.addWidget(center_section, 1)
 
+        right_section = QWidget()
+        right_layout = QVBoxLayout(right_section)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(8)
+
+        volume_row = QHBoxLayout()
+        volume_row.setContentsMargins(0, 0, 0, 0)
+        volume_row.setSpacing(8)
+
+        self._mute_btn = QPushButton("🔊")
+        self._mute_btn.setFixedSize(38, 32)
+        self._mute_btn.clicked.connect(self._on_toggle_mute)
+        volume_row.addWidget(self._mute_btn)
+
+        self._volume_slider = QSlider(Qt.Horizontal)
+        self._volume_slider.setObjectName("volumeSlider")
+        self._volume_slider.setRange(0, 100)
+        self._volume_slider.setValue(80)
+        self._volume_slider.setFixedWidth(120)
+        self._volume_slider.valueChanged.connect(self._on_volume_changed)
+        volume_row.addWidget(self._volume_slider)
+
+        self._volume_label = QLabel("80%")
+        self._volume_label.setObjectName("timeLabel")
+        self._volume_label.setFixedWidth(42)
+        volume_row.addWidget(self._volume_label)
+        right_layout.addLayout(volume_row)
+
+        self._playback_hint_label = QLabel("空格键 播放 / 暂停")
+        self._playback_hint_label.setObjectName("timeLabel")
+        right_layout.addWidget(self._playback_hint_label, 0, Qt.AlignRight)
+        right_layout.addStretch(1)
+        layout.addWidget(right_section, 0)
+
+        self._volume_muted = False
+        self._volume_before_mute = 80
         parent_layout.addWidget(bar)
 
     def _create_status_bar(self) -> None:
@@ -426,11 +872,11 @@ class MainWindow(QMainWindow):
         status = QStatusBar()
         status.setStyleSheet("""
             QStatusBar {
-                background-color: #181825;
-                border-top: 1px solid #313244;
-                border-bottom: 1px solid #313244;
+                background-color: #15191F;
+                border-top: 1px solid #2A313B;
+                border-bottom: 1px solid #2A313B;
                 font-size: 11px;
-                color: #6c7086;
+                color: #8E9AA7;
             }
         """)
 
@@ -470,17 +916,19 @@ class MainWindow(QMainWindow):
         self._playlist_widget.info_requested.connect(self._on_info_requested)
         self._playlist_widget.favorite_add_requested.connect(self._on_favorite_add_requested)
         self._playlist_widget.favorite_remove_requested.connect(self._on_favorite_remove_requested)
+        self._playlist_widget.selection_changed.connect(self._on_queue_selection_changed)
 
         # -- FavoritesManager -> UI --
         self._favorites_manager.favorites_loaded.connect(self._on_favorites_updated)
         self._favorites_manager.favorites_changed.connect(self._on_favorites_updated)
 
-        # -- Favorites window --
-        self._favorites_window.play_requested.connect(self._on_favorites_play_requested)
-        self._favorites_window.remove_favorite_requested.connect(
+        # -- Favorites page --
+        self._favorites_widget.play_requested.connect(self._on_favorites_play_requested)
+        self._favorites_widget.favorite_remove_requested.connect(
             self._on_favorites_window_remove_requested
         )
-        self._favorites_window.order_changed.connect(self._on_favorites_reordered)
+        self._favorites_widget.order_changed.connect(self._on_favorites_reordered)
+        self._favorites_widget.selection_changed.connect(self._on_favorites_selection_changed)
         self._lyrics_window.visibility_changed.connect(self._on_lyrics_window_visibility_changed)
 
         # -- AudioEngine -> UI --
@@ -500,6 +948,8 @@ class MainWindow(QMainWindow):
         # -- SearchPanel --
         self._search_panel.add_to_playlist_requested.connect(self._on_search_add_to_playlist)
         self._search_panel.download_requested.connect(self._on_search_download)
+        self._search_panel.selection_changed.connect(self._on_search_selection_changed)
+        self._search_panel.results_changed.connect(self._on_search_results_changed)
 
         # -- Search provider --
         self._search_provider.results_ready.connect(self._search_panel.display_results)
@@ -517,6 +967,7 @@ class MainWindow(QMainWindow):
         songs = self._playlist_manager.playlist
         self._playlist_widget.load_songs(songs)
         self._playlist_widget.set_favorite_paths(self._favorites_manager.favorite_paths)
+        self._queue_count_label.setText(f"{len(songs)} 首")
         session_state = self._normalize_session_state(self._playlist_manager.session_state)
         self._restore_selection_only = (
             bool(session_state.get("current_file_path"))
@@ -530,20 +981,28 @@ class MainWindow(QMainWindow):
         # text to "未播放" would be wrong while a track is still active.
         current_song = self._playlist_manager.get_current_song()
         self._update_song_info(current_song)
+        if not songs:
+            self._queue_inspector.show_placeholder()
 
     @Slot(int)
     def _on_song_added(self, index: int) -> None:
         """A song was added at *index* – refresh view."""
+        del index
         songs = self._playlist_manager.playlist
         self._playlist_widget.load_songs(songs)
         self._playlist_widget.set_favorite_paths(self._favorites_manager.favorite_paths)
+        self._queue_count_label.setText(f"{len(songs)} 首")
 
     @Slot(int, object)
     def _on_song_removed(self, index: int, song: object) -> None:
         """A song was removed – refresh view."""
+        del index, song
         songs = self._playlist_manager.playlist
         self._playlist_widget.load_songs(songs)
         self._playlist_widget.set_favorite_paths(self._favorites_manager.favorite_paths)
+        self._queue_count_label.setText(f"{len(songs)} 首")
+        if not songs:
+            self._queue_inspector.show_placeholder()
 
     @Slot(object)
     def _on_current_song_changed(self, song: Optional[Song]) -> None:
@@ -583,9 +1042,22 @@ class MainWindow(QMainWindow):
         """Highlight the current row in the playlist."""
         self._playlist_widget.highlight_row(index)
 
+    @Slot(int)
+    def _on_queue_selection_changed(self, index: int) -> None:
+        """Refresh the queue inspector when the selected row changes."""
+        self._queue_selected_index = index
+        song = self._playlist_widget.model.song_at(index)
+        self._queue_inspector.update_song(
+            song,
+            is_favorite=bool(song and song.file_path in self._favorites_manager.favorite_paths),
+            note="当前队列中的歌曲可直接播放、移除、收藏或查看详情。",
+            allow_details=bool(song and self._can_show_song_details(song)),
+        )
+
     @Slot(object)
     def _on_play_mode_changed(self, mode: PlayMode) -> None:
         """Update play mode display."""
+        del mode
         self._update_play_mode_action()
         self._refresh_mode_btn()
 
@@ -635,6 +1107,20 @@ class MainWindow(QMainWindow):
             dialog = SongInfoDialog(songs[index], self)
             dialog.exec()
 
+    @Slot()
+    def _open_queue_song_details(self) -> None:
+        """Open the details dialog for the selected queue song."""
+        if self._queue_selected_index >= 0:
+            self._on_info_requested(self._queue_selected_index)
+
+    @Slot()
+    def _open_search_song_details(self) -> None:
+        """Open the details dialog for the selected search result when local."""
+        song = self._search_selected_song
+        if song is not None and self._can_show_song_details(song):
+            dialog = SongInfoDialog(song, self)
+            dialog.exec()
+
     @Slot(int)
     def _on_favorite_add_requested(self, index: int) -> None:
         """Add the selected playlist song to favorites."""
@@ -661,9 +1147,16 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_favorites_updated(self) -> None:
-        """Refresh favorite markers and keep the favorites window in sync."""
+        """Refresh favorite markers and keep the favorites page in sync."""
         self._playlist_widget.set_favorite_paths(self._favorites_manager.favorite_paths)
-        self._favorites_window.load_songs(self._favorites_manager.favorites)
+        favorites = self._favorites_manager.favorites
+        self._favorites_widget.load_songs(favorites)
+        self._favorites_widget.set_favorite_paths(self._favorites_manager.favorite_paths)
+        self._favorites_count_label.setText(f"{len(favorites)} 首")
+        if not favorites:
+            self._favorites_inspector.show_placeholder()
+        self._on_queue_selection_changed(self._queue_selected_index)
+        self._on_search_selection_changed(self._search_selected_song)
 
     @Slot(int)
     def _on_favorites_play_requested(self, index: int) -> None:
@@ -674,10 +1167,11 @@ class MainWindow(QMainWindow):
         if self._audio_engine.state != PlayState.STOPPED:
             self._audio_engine.stop()
         self._playlist_manager.load_playlist(favorites, start_index=index)
+        self.navigate_to(PageId.QUEUE)
 
     @Slot(int)
     def _on_favorites_window_remove_requested(self, index: int) -> None:
-        """Remove the selected song from the favorites window only."""
+        """Remove the selected song from favorites without touching the queue."""
         favorites = self._favorites_manager.favorites
         if not 0 <= index < len(favorites):
             return
@@ -688,9 +1182,29 @@ class MainWindow(QMainWindow):
 
     @Slot(list)
     def _on_favorites_reordered(self, songs: list[Song]) -> None:
-        """Persist drag-and-drop ordering from the favorites window."""
+        """Persist drag-and-drop ordering from the favorites page."""
         self._favorites_manager.reorder_favorites(songs)
         self._favorites_manager.save_favorites()
+
+    @Slot(int)
+    def _on_favorites_selection_changed(self, index: int) -> None:
+        """Refresh the favorites inspector when the selected row changes."""
+        self._favorites_selected_index = index
+        song = self._favorites_widget.model.song_at(index)
+        self._favorites_inspector.update_song(
+            song,
+            is_favorite=bool(song),
+            note="收藏页中的歌曲可以直接播放，也可以取消收藏。",
+            allow_details=bool(song and self._can_show_song_details(song)),
+        )
+
+    @Slot()
+    def _open_favorite_song_details(self) -> None:
+        """Open the details dialog for the selected favorite song."""
+        favorites = self._favorites_manager.favorites
+        if 0 <= self._favorites_selected_index < len(favorites):
+            dialog = SongInfoDialog(favorites[self._favorites_selected_index], self)
+            dialog.exec()
 
     # ================================================================
     # Slots – Audio Engine
@@ -909,8 +1423,8 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_open_favorites(self) -> None:
-        """Show the dedicated favorites window."""
-        self._favorites_window.show_and_raise()
+        """Switch to the favorites page inside the main workspace."""
+        self.navigate_to(PageId.FAVORITES)
 
     # -----------------------------------------------------------------
     # Helpers
@@ -1083,6 +1597,24 @@ class MainWindow(QMainWindow):
         path.mkdir(parents=True, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
         self._status_label.setText(f"已打开: {path}")
+
+    @Slot(object)
+    def _on_search_selection_changed(self, song: Optional[Song]) -> None:
+        """Refresh the search inspector from the panel selection."""
+        self._search_selected_song = song
+        self._search_inspector.update_song(
+            song,
+            is_favorite=bool(song and song.file_path in self._favorites_manager.favorite_paths),
+            note="在线结果可以加入当前队列或下载到本地；本地化后可获得完整详情。",
+            allow_details=bool(song and self._can_show_song_details(song)),
+        )
+
+    @Slot(int)
+    def _on_search_results_changed(self, count: int) -> None:
+        """Update the header badge for the search page."""
+        self._search_count_label.setText(f"{count} 条")
+        if count == 0 and self._search_selected_song is None:
+            self._search_inspector.show_placeholder()
 
     # ================================================================
     # Slots – Settings
@@ -1316,27 +1848,20 @@ class MainWindow(QMainWindow):
         """Return whether *file_path* looks like a supported local audio file."""
         return Path(file_path).suffix.lower() in SUPPORTED_EXTENSIONS
 
+    @staticmethod
+    def _can_show_song_details(song: Song) -> bool:
+        """Return whether a song has a local file that can be inspected safely."""
+        file_path = str(song.file_path or "").strip()
+        if not file_path or file_path.startswith(("http://", "https://")):
+            return False
+        return Path(file_path).suffix != ""
+
     def _update_cover_art(self, song: Song) -> None:
-        """Display the current song's embedded cover art when available."""
-        art_bytes = extract_cover_art(song.file_path)
-        if art_bytes:
-            pixmap = QPixmap()
-            if pixmap.loadFromData(art_bytes):
-                self._cover_label.setPixmap(
-                    pixmap.scaled(
-                        self._cover_label.size(),
-                        Qt.KeepAspectRatioByExpanding,
-                        Qt.SmoothTransformation,
-                    )
-                )
-                self._cover_label.setText("")
-                return
-        self._reset_cover_art()
+        """Keep playback-bar cover handling disabled; inspectors own artwork now."""
+        del song
 
     def _reset_cover_art(self) -> None:
-        """Restore the default cover-art placeholder."""
-        self._cover_label.clear()
-        self._cover_label.setText("♪")
+        """Playback bar no longer renders artwork."""
 
     def _normalize_session_state(self, state: dict[str, object]) -> dict[str, object]:
         """Coerce persisted session metadata into a predictable shape."""
@@ -1360,8 +1885,11 @@ class MainWindow(QMainWindow):
                 self._song_info_full_text = f"♫  {song.artist} – {song.title}"
             else:
                 self._song_info_full_text = f"♫  {song.title}"
+            meta_parts = [part for part in (song.album, song.file_format.upper() if song.file_format else "") if part]
+            self._song_meta_label.setText(" · ".join(meta_parts) if meta_parts else "当前队列中的歌曲")
         else:
             self._song_info_full_text = "未播放"
+            self._song_meta_label.setText("等待播放")
         self._refresh_song_info_label()
 
     def _refresh_song_info_label(self) -> None:
@@ -1395,6 +1923,15 @@ class MainWindow(QMainWindow):
         sc = QShortcut(QKeySequence(Qt.Key_Space), self)
         sc.setContext(Qt.ApplicationShortcut)
         sc.activated.connect(self._on_play_pause)
+
+        for sequence, page_id in (
+            ("Ctrl+1", PageId.QUEUE),
+            ("Ctrl+2", PageId.SEARCH),
+            ("Ctrl+3", PageId.FAVORITES),
+        ):
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.setContext(Qt.ApplicationShortcut)
+            shortcut.activated.connect(lambda pid=page_id: self.navigate_to(pid))
 
     def _load_lyrics_for(self, song: Song) -> None:
         """Try to load an LRC file for *song* and feed it to the lyrics window."""
@@ -1448,5 +1985,4 @@ class MainWindow(QMainWindow):
             )
         else:
             self._audio_engine.stop()
-            self._favorites_window.close()
             super().closeEvent(event)
