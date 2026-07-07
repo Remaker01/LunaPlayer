@@ -1050,7 +1050,7 @@ class MainWindow(QMainWindow):
         self._queue_inspector.update_song(
             song,
             is_favorite=bool(song and song.file_path in self._favorites_manager.favorite_paths),
-            note="当前队列中的歌曲可直接播放、移除、收藏或查看详情。",
+            note="",
             allow_details=bool(song and self._can_show_song_details(song)),
         )
 

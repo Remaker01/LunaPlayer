@@ -46,6 +46,8 @@ class _SearchResultItem(QWidget):
         super().__init__(parent)
         self.song = song
         self.setObjectName("searchResultItem")
+        # Accept width changes from the host list so word-wrapped labels
+        # reflow when the window is resized.
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
 
         layout = QHBoxLayout(self)
@@ -58,7 +60,9 @@ class _SearchResultItem(QWidget):
 
         title_label = QLabel(song.title)
         title_label.setStyleSheet("font-weight: 700; font-size: 13px; color: #F2F6F9;")
-        title_label.setWordWrap(False)
+        # Allow multi-line wrapping when the panel is narrow.
+        title_label.setWordWrap(True)
+        title_label.setMinimumWidth(100)
         info_layout.addWidget(title_label)
 
         subtitle = song.artist if song.artist else "<未知艺术家>"
@@ -66,7 +70,8 @@ class _SearchResultItem(QWidget):
             subtitle += f" · {song.album}"
         artist_label = QLabel(subtitle)
         artist_label.setStyleSheet("color: #98A6B5; font-size: 11px;")
-        artist_label.setWordWrap(False)
+        artist_label.setWordWrap(True)
+        artist_label.setMinimumWidth(100)
         info_layout.addWidget(artist_label)
 
         layout.addLayout(info_layout, 1)
@@ -314,10 +319,26 @@ class SearchPanel(QWidget):
         self._refresh_result_item_sizes()
 
     def _refresh_result_item_sizes(self) -> None:
-        """Update custom item widths so text can use the full results area."""
-        viewport_width = max(220, self._results_list.viewport().width() - 6)
+        """Stretch items to the viewport width so word-wrap can reflow.
+
+        Sets a uniform width on every custom result widget, then asks
+        each widget for its preferred height after wrapping (automatic
+        when ``wordWrap`` is enabled).  The corresponding list item's
+        ``sizeHint`` is updated accordingly so rows can be taller when
+        text wraps to multiple lines.
+        """
+        viewport_width = max(220, self._results_list.viewport().width() - 10)
         for row in range(self._results_list.count()):
             item = self._results_list.item(row)
+            widget = self._results_list.itemWidget(item)
+            if widget is None:
+                continue
+            # Give the widget a fixed width so its layout can compute
+            # the correct height for wrapped text.
+            widget.setFixedWidth(viewport_width)
+            hint = widget.sizeHint()
+            hint.setWidth(viewport_width)
+            item.setSizeHint(hint)
             widget = self._results_list.itemWidget(item)
             if widget is None:
                 continue
