@@ -95,6 +95,7 @@ set -- \
     --file-description="LunaPlayer - 音乐播放器" \
     --file-version=1.0.0.0 \
     --product-version=1.0.0.0 \
+    --python-flag=no_docstrings \
     "--output-filename=$OUTPUT_FILENAME" \
     "--output-dir=$OUTPUT_DIR"
 
