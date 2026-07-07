@@ -17,7 +17,6 @@ All communication between the two classes happens through Qt signals – the
 decoder thread never touches any QObject that lives in the main thread.
 """
 
-from __future__ import annotations
 
 import enum
 import logging
@@ -524,12 +523,23 @@ class AudioEngine(QObject):
         self._set_state(PlayState.PAUSED)
 
     def resume(self) -> None:
-        """Resume after a pause."""
+        """Resume after a pause.
+
+        If the decoder reached EOF while we were paused, restart the
+        end-of-track drain polling so the track can finish naturally.
+        """
         if self._state != PlayState.PAUSED:
             return
         if self._sink is not None:
             self._sink.resume()
         self._set_state(PlayState.PLAYING)
+
+        # The decoder may have finished while we were paused.  In that
+        # case _check_finished already ran once and returned early
+        # (because the state was PAUSED).  Kick it again so the
+        # remaining buffered data can drain and trigger track_finished.
+        if self._finish_seq == self._track_seq:
+            self._check_finished()
 
     def toggle_play_pause(self) -> None:
         """Convenience: play if paused / paused if playing."""
