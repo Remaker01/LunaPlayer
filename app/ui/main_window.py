@@ -521,11 +521,6 @@ class MainWindow(QMainWindow):
         app_label.setObjectName("navAppTitle")
         layout.addWidget(app_label)
 
-        caption = QLabel("本地音乐工作台")
-        caption.setObjectName("navAppCaption")
-        layout.addWidget(caption)
-        layout.addSpacing(8)
-
         button_specs = [
             (PageId.QUEUE, "Ctrl+1", "当前队列"),
             (PageId.SEARCH, "Ctrl+2", "在线搜索"),
@@ -564,7 +559,6 @@ class MainWindow(QMainWindow):
     def _create_page_header(
         self,
         title: str,
-        subtitle: str,
         primary_action: Optional[tuple[str, object]] = None,
         secondary_action: Optional[tuple[str, object]] = None,
     ) -> tuple[QWidget, QLabel]:
@@ -591,11 +585,6 @@ class MainWindow(QMainWindow):
         title_row.addWidget(count_label, 0, Qt.AlignVCenter)
         title_row.addStretch(1)
         text_column.addLayout(title_row)
-
-        subtitle_label = QLabel(subtitle)
-        subtitle_label.setObjectName("pageSubtitle")
-        subtitle_label.setWordWrap(True)
-        text_column.addWidget(subtitle_label)
 
         layout.addLayout(text_column, 1)
 
@@ -624,7 +613,6 @@ class MainWindow(QMainWindow):
 
         header, self._queue_count_label = self._create_page_header(
             "当前队列",
-            "管理本次播放队列，保留拖拽排序和右键操作，并为未来的播放列表工作区预留结构。",
         )
         layout.addWidget(header)
 
@@ -661,7 +649,6 @@ class MainWindow(QMainWindow):
 
         header, self._search_count_label = self._create_page_header(
             "在线搜索",
-            "将在线搜索从主分屏中独立出来，方便未来加入下载队列、来源筛选和更多结果操作。",
         )
         self._search_count_label.setText("0 条")
         layout.addWidget(header)
@@ -697,7 +684,6 @@ class MainWindow(QMainWindow):
 
         header, self._favorites_count_label = self._create_page_header(
             "收藏",
-            "收藏页现在是主工作台的一部分，方便以后扩展成更完整的本地媒体库入口。",
         )
         layout.addWidget(header)
 
