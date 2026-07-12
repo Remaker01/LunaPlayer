@@ -119,6 +119,9 @@ class LyricsWindow(QWidget):
     HIGHLIGHT_COLOR = QColor(245, 200, 255, 255)
     SHADOW_COLOR = QColor(0, 0, 0, 70)
     PLACEHOLDER_COLOR = QColor(225, 230, 246, 170)
+    DEFAULT_OPACITY_PERCENT = 60
+    MIN_OPACITY_PERCENT = 20
+    MAX_OPACITY_PERCENT = 100
 
     WINDOW_MARGIN = 10
     CONTENT_PADDING_H = 44
@@ -132,6 +135,9 @@ class LyricsWindow(QWidget):
     DEFAULT_FONT_SIZE = 22
     MIN_FONT_SIZE = 12
     MAX_FONT_SIZE = 48
+    DEFAULT_OPACITY_PERCENT = 40
+    MIN_OPACITY_PERCENT = 0
+    MAX_OPACITY_PERCENT = 80
     TRANSITION_DURATION_MS = 180
     TRANSITION_INTERVAL_MS = 16
 
@@ -155,6 +161,9 @@ class LyricsWindow(QWidget):
         self._current_line_index: int = -1
         self._locked: bool = False
         self._font_size: int = self.DEFAULT_FONT_SIZE
+        self._lyrics_opacity_percent: int = self.DEFAULT_OPACITY_PERCENT
+        self._lyrics_text_color: QColor = QColor(self.TEXT_COLOR)
+        self._panel_color: QColor = QColor(self.PANEL_BG_COLOR)
         self._dragging: bool = False
         self._drag_offset: QPoint = QPoint()
 
@@ -167,6 +176,7 @@ class LyricsWindow(QWidget):
         self._transition_timer.timeout.connect(self._advance_transition)
 
         self._update_font()
+        self._update_rendering_colors()
 
     @Slot(list)
     def load_lyrics(self, lrc_lines: List[LrcLine]) -> None:
@@ -217,6 +227,36 @@ class LyricsWindow(QWidget):
 
     def lyrics_font_size(self) -> int:
         return self._font_size
+
+    def set_lyrics_opacity(self, opacity_percent: int) -> None:
+        """Set the lyrics panel transparency as a percent."""
+        self._lyrics_opacity_percent = max(self.MIN_OPACITY_PERCENT, min(self.MAX_OPACITY_PERCENT, opacity_percent))
+        self._update_rendering_colors()
+        self.update()
+
+    def lyrics_opacity(self) -> int:
+        return self._lyrics_opacity_percent
+
+    def set_lyrics_text_color(self, color: QColor | str) -> None:
+        """Set the lyrics text color."""
+        if isinstance(color, str):
+            color = QColor(color)
+        if not color.isValid():
+            return
+        self._lyrics_text_color = color
+        self._update_rendering_colors()
+        self.update()
+
+    def lyrics_text_color(self) -> QColor:
+        return QColor(self._lyrics_text_color)
+
+    def _update_rendering_colors(self) -> None:
+        """Update dynamic rendering colors based on opacity and text color."""
+        self._panel_color = QColor(self.PANEL_BG_COLOR)
+        self._panel_color.setAlpha(int((100 - self._lyrics_opacity_percent) / 100.0 * self.PANEL_BG_COLOR.alpha()))
+
+        self._text_color = QColor(self._lyrics_text_color)
+        self._text_color.setAlpha(self.TEXT_COLOR.alpha())
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton and not self._locked:
@@ -390,7 +430,7 @@ class LyricsWindow(QWidget):
             -self.WINDOW_MARGIN,
         )
         painter.setPen(QPen(self.PANEL_BORDER_COLOR, 1))
-        painter.setBrush(self.PANEL_BG_COLOR)
+        painter.setBrush(self._panel_color)
         painter.drawRoundedRect(panel, self.PANEL_RADIUS, self.PANEL_RADIUS)
 
     def _paint_placeholder(self, painter: QPainter) -> None:
@@ -456,9 +496,9 @@ class LyricsWindow(QWidget):
 
         mix = min(1.0, max(0.0, highlight_strength))
         color = QColor(
-            int(self.TEXT_COLOR.red() + (self.HIGHLIGHT_COLOR.red() - self.TEXT_COLOR.red()) * mix),
-            int(self.TEXT_COLOR.green() + (self.HIGHLIGHT_COLOR.green() - self.TEXT_COLOR.green()) * mix),
-            int(self.TEXT_COLOR.blue() + (self.HIGHLIGHT_COLOR.blue() - self.TEXT_COLOR.blue()) * mix),
+            int(self._text_color.red() + (self.HIGHLIGHT_COLOR.red() - self._text_color.red()) * mix),
+            int(self._text_color.green() + (self.HIGHLIGHT_COLOR.green() - self._text_color.green()) * mix),
+            int(self._text_color.blue() + (self.HIGHLIGHT_COLOR.blue() - self._text_color.blue()) * mix),
         )
         color.setAlpha(int(base_alpha + (255 - base_alpha) * mix))
         return color

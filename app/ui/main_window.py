@@ -29,7 +29,7 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import QDir, Qt, Signal, Slot, QUrl
-from PySide6.QtGui import QAction, QDesktopServices, QIcon, QKeySequence, QPixmap, QShortcut
+from PySide6.QtGui import QAction, QColor, QDesktopServices, QIcon, QKeySequence, QPixmap, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -611,9 +611,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        header, self._queue_count_label = self._create_page_header(
-            "当前队列",
-        )
+        header, self._queue_count_label = self._create_page_header("当前队列")
         layout.addWidget(header)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -647,9 +645,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        header, self._search_count_label = self._create_page_header(
-            "在线搜索",
-        )
+        header, self._search_count_label = self._create_page_header("在线搜索")
         self._search_count_label.setText("0 条")
         layout.addWidget(header)
 
@@ -682,9 +678,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        header, self._favorites_count_label = self._create_page_header(
-            "收藏",
-        )
+        header, self._favorites_count_label = self._create_page_header("收藏")
         layout.addWidget(header)
 
         splitter = QSplitter(Qt.Horizontal)
@@ -1146,13 +1140,15 @@ class MainWindow(QMainWindow):
 
     @Slot(int)
     def _on_favorites_play_requested(self, index: int) -> None:
-        """Load favorites into the main player and start from *index*."""
+        """Add the selected favorite song to the queue tail and play it."""
         favorites = self._favorites_manager.favorites
         if not 0 <= index < len(favorites):
             return
+        song = favorites[index]
         if self._audio_engine.state != PlayState.STOPPED:
             self._audio_engine.stop()
-        self._playlist_manager.load_playlist(favorites, start_index=index)
+        new_index = self._playlist_manager.add_song(song)
+        self._playlist_manager.go_to(new_index)
         self.navigate_to(PageId.QUEUE)
 
     @Slot(int)
@@ -1618,6 +1614,8 @@ class MainWindow(QMainWindow):
             self._download_dir = new_settings.download_dir
             self._search_panel.set_download_dir(self._download_dir)
             self._lyrics_window.set_lyrics_font_size(new_settings.lyrics_font_size)
+            self._lyrics_window.set_lyrics_opacity(new_settings.lyrics_opacity)
+            self._lyrics_window.set_lyrics_text_color(QColor(new_settings.lyrics_text_color))
             self._volume_slider.setValue(new_settings.volume)
             self._playlist_manager.set_play_mode(new_settings.default_play_mode)
             self._close_to_tray = new_settings.close_to_tray
@@ -1632,6 +1630,8 @@ class MainWindow(QMainWindow):
         """Load persisted settings and apply them to the UI."""
         saved = Settings.load()
         self._lyrics_window.set_lyrics_font_size(saved.lyrics_font_size)
+        self._lyrics_window.set_lyrics_opacity(saved.lyrics_opacity)
+        self._lyrics_window.set_lyrics_text_color(QColor(saved.lyrics_text_color))
         self._volume_slider.setValue(saved.volume)
         self._playlist_manager.set_play_mode(saved.default_play_mode)
         self._close_to_tray = saved.close_to_tray

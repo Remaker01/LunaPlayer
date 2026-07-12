@@ -9,8 +9,10 @@ from __future__ import annotations
 
 from typing import Optional
 
-from PySide6.QtCore import Slot
+from PySide6.QtCore import Qt, Slot
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QColorDialog,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -24,6 +26,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QLineEdit,
     QPushButton,
+    QSlider,
     QSpinBox,
     QStackedWidget,
     QVBoxLayout,
@@ -40,12 +43,16 @@ import app.services.config as cfg
 
 KEY_DOWNLOAD_DIR = "download_dir"
 KEY_LYRICS_FONT_SIZE = "lyrics_font_size"
+KEY_LYRICS_OPACITY = "lyrics_opacity"
+KEY_LYRICS_TEXT_COLOR = "lyrics_text_color"
 KEY_DEFAULT_PLAY_MODE = "default_play_mode"
 KEY_VOLUME = "volume"
 KEY_CLOSE_TO_TRAY = "close_to_tray"
 
 _DEFAULT_DOWNLOAD_DIR = str(default_download_dir())
 _DEFAULT_FONT_SIZE = 22
+_DEFAULT_LYRICS_OPACITY = 40
+_DEFAULT_LYRICS_TEXT_COLOR = "#EFF3FF"
 _DEFAULT_VOLUME = 80
 
 
@@ -60,12 +67,16 @@ class Settings:
         self,
         download_dir: str = _DEFAULT_DOWNLOAD_DIR,
         lyrics_font_size: int = _DEFAULT_FONT_SIZE,
+        lyrics_opacity: int = _DEFAULT_LYRICS_OPACITY,
+        lyrics_text_color: str = _DEFAULT_LYRICS_TEXT_COLOR,
         default_play_mode: PlayMode = PlayMode.SEQUENTIAL,
         volume: int = _DEFAULT_VOLUME,
         close_to_tray: bool = True,
     ) -> None:
         self.download_dir = download_dir
         self.lyrics_font_size = lyrics_font_size
+        self.lyrics_opacity = lyrics_opacity
+        self.lyrics_text_color = lyrics_text_color
         self.default_play_mode = default_play_mode
         self.volume = volume
         self.close_to_tray = close_to_tray
@@ -76,6 +87,8 @@ class Settings:
         return cls(
             download_dir=cfg.get(KEY_DOWNLOAD_DIR, _DEFAULT_DOWNLOAD_DIR),
             lyrics_font_size=cfg.get(KEY_LYRICS_FONT_SIZE, _DEFAULT_FONT_SIZE),
+            lyrics_opacity=cfg.get(KEY_LYRICS_OPACITY, _DEFAULT_LYRICS_OPACITY),
+            lyrics_text_color=cfg.get(KEY_LYRICS_TEXT_COLOR, _DEFAULT_LYRICS_TEXT_COLOR),
             default_play_mode=PlayMode(cfg.get(KEY_DEFAULT_PLAY_MODE, PlayMode.SEQUENTIAL)),
             volume=cfg.get(KEY_VOLUME, _DEFAULT_VOLUME),
             close_to_tray=cfg.get(KEY_CLOSE_TO_TRAY, True),
@@ -85,6 +98,8 @@ class Settings:
         """Persist all settings to the config file."""
         cfg.set(KEY_DOWNLOAD_DIR, self.download_dir)
         cfg.set(KEY_LYRICS_FONT_SIZE, self.lyrics_font_size)
+        cfg.set(KEY_LYRICS_OPACITY, self.lyrics_opacity)
+        cfg.set(KEY_LYRICS_TEXT_COLOR, self.lyrics_text_color)
         cfg.set(KEY_DEFAULT_PLAY_MODE, int(self.default_play_mode))
         cfg.set(KEY_VOLUME, self.volume)
         cfg.set(KEY_CLOSE_TO_TRAY, self.close_to_tray)
@@ -241,17 +256,57 @@ class SettingsDialog(QDialog):
         self._font_size_spin.setValue(current.lyrics_font_size)
         lrc_form.addRow("字体大小:", self._font_size_spin)
 
+        self._opacity_slider = QSlider(Qt.Horizontal)
+        self._opacity_slider.setRange(0, 80)
+        self._opacity_slider.setValue(current.lyrics_opacity)
+        self._opacity_slider.setTickInterval(5)
+        self._opacity_slider.valueChanged.connect(self._update_opacity_label)
+
+        self._opacity_value_label = QLabel(f"{current.lyrics_opacity}%")
+        opacity_row = QWidget()
+        opacity_row_layout = QHBoxLayout(opacity_row)
+        opacity_row_layout.setContentsMargins(0, 0, 0, 0)
+        opacity_row_layout.addWidget(self._opacity_slider)
+        opacity_row_layout.addWidget(self._opacity_value_label)
+        lrc_form.addRow("透明度:", opacity_row)
+
+        self._color_button = QPushButton()
+        self._lyrics_color_hex = current.lyrics_text_color
+        self._color_button.clicked.connect(self._pick_lyrics_color)
+        self._update_color_button_style()
+        lrc_form.addRow("歌词颜色:", self._color_button)
+
         layout.addWidget(lrc_group)
 
-        preview_group = QGroupBox("界面说明")
-        preview_layout = QVBoxLayout(preview_group)
-        preview_text = QLabel("当前界面采用深色桌面工作台布局，后续可在这里扩展主题、列表密度和封面显示策略。")
-        preview_text.setWordWrap(True)
-        preview_layout.addWidget(preview_text)
-        layout.addWidget(preview_group)
+        # preview_group = QGroupBox("界面说明")
+        # preview_layout = QVBoxLayout(preview_group)
+        # preview_text = QLabel("当前界面采用深色桌面工作台布局，后续可在这里扩展主题、列表密度和封面显示策略。")
+        # preview_text.setWordWrap(True)
+        # preview_layout.addWidget(preview_text)
+        # layout.addWidget(preview_group)
 
         layout.addStretch(1)
         self._add_section("界面", "界面与歌词显示", page)
+
+    @Slot(int)
+    def _update_opacity_label(self, value: int) -> None:
+        """Update the opacity label when the slider moves."""
+        self._opacity_value_label.setText(f"{value}%")
+
+    @Slot()
+    def _pick_lyrics_color(self) -> None:
+        """Open a color picker for lyrics text color."""
+        color = QColorDialog.getColor(QColor(self._lyrics_color_hex), self, "选择歌词颜色")
+        if color.isValid():
+            self._lyrics_color_hex = color.name()
+            self._update_color_button_style()
+
+    def _update_color_button_style(self) -> None:
+        """Update the color chooser button to reflect the selected color."""
+        self._color_button.setText(self._lyrics_color_hex)
+        self._color_button.setStyleSheet(
+            f"background-color: {self._lyrics_color_hex}; color: #000000; border: 1px solid #999; padding: 6px;"
+        )
 
     def _build_behavior_page(self, current: Settings) -> None:
         """Build the behavior section."""
@@ -290,6 +345,8 @@ class SettingsDialog(QDialog):
         self._result = Settings(
             download_dir=self._dl_path.text(),
             lyrics_font_size=self._font_size_spin.value(),
+            lyrics_opacity=self._opacity_slider.value(),
+            lyrics_text_color=self._lyrics_color_hex,
             default_play_mode=self._play_mode_combo.currentData(),
             volume=self._volume_spin.value(),
             close_to_tray=self._tray_cb.isChecked(),
