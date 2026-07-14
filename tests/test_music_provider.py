@@ -11,12 +11,14 @@ from app.services.music_provider import (
 
 
 class TestMusicProviderFormatDetection(unittest.TestCase):
-    def test_content_disposition_filename_takes_priority(self) -> None:
+    def test_content_disposition_filename_is_used_when_no_magic(self) -> None:
+        """Content-Disposition is used as a fallback when magic bytes and
+        Content-Type are not available (but not preferred over magic)."""
         fmt = _select_audio_format(
             {"Content-Disposition": 'attachment; filename="track.flac"',
-             "Content-Type": "audio/mpeg"},
+             "Content-Type": "application/octet-stream"},
             "https://example.com/download",
-            b"ID3",
+            b"",
             "mp3",
         )
 
@@ -72,7 +74,9 @@ class TestMusicProviderFormatDetection(unittest.TestCase):
 
         self.assertEqual(fmt, "aac")
 
-    def test_build_song_uses_api_format_when_available(self) -> None:
+    def test_build_song_leaves_format_empty(self) -> None:
+        """Format is not determined at search time; it is detected at
+        download/play time from the actual file content."""
         song = _build_song({
             "name": "Example",
             "artist": "Artist",
@@ -81,7 +85,36 @@ class TestMusicProviderFormatDetection(unittest.TestCase):
         })
 
         self.assertIsNotNone(song)
-        self.assertEqual(song.file_format, "flac")
+        self.assertEqual(song.file_format, "")
+
+    def test_php_api_url_leaves_format_empty(self) -> None:
+        """Regression: PHP API URLs must not set any format at search time."""
+        song = _build_song({
+            "name": "Test",
+            "artist": "Artist",
+            "url": "https://music.90svip.cn/api.php?get=url&type=wy&id=xxx&sign=abc&t=123",
+        })
+        self.assertIsNotNone(song)
+        self.assertEqual(song.file_format, "")
+
+    def test_format_from_php_url_returns_empty(self) -> None:
+        """_format_from_url must reject .php extensions."""
+        from app.services.music_provider import _format_from_url
+        self.assertEqual(_format_from_url(
+            "https://music.90svip.cn/api.php?get=url&type=wy&id=xxx&sign=abc&t=123"
+        ), "")
+        self.assertEqual(_format_from_url("https://example.com/download.php"), "")
+
+    def test_magic_bytes_beat_content_disposition(self) -> None:
+        """Magic bytes detection must take priority over Content-Disposition."""
+        fmt = _select_audio_format(
+            {"Content-Disposition": 'attachment; filename="track.php"',
+             "Content-Type": "application/octet-stream"},
+            "https://example.com/download.php",
+            b"ID3",
+            "mp3",
+        )
+        self.assertEqual(fmt, "mp3")
 
 
 if __name__ == "__main__":

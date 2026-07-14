@@ -125,7 +125,6 @@ class _InspectorPanel(QWidget):
         self._meta_form.setLabelAlignment(Qt.AlignLeft)
 
         self._album_value = QLabel()
-        self._format_value = QLabel()
         self._duration_value = QLabel()
         self._path_value = QLabel()
         self._path_value.setWordWrap(True)
@@ -133,11 +132,10 @@ class _InspectorPanel(QWidget):
             Qt.TextSelectableByMouse | Qt.TextSelectableByKeyboard
         )
 
-        for label in (self._album_value, self._format_value, self._duration_value, self._path_value):
+        for label in (self._album_value, self._duration_value, self._path_value):
             label.setWordWrap(True)
 
         self._meta_form.addRow("专辑", self._album_value)
-        self._meta_form.addRow("格式", self._format_value)
         self._meta_form.addRow("时长", self._duration_value)
         self._meta_form.addRow("路径", self._path_value)
         layout.addLayout(self._meta_form)
@@ -191,7 +189,6 @@ class _InspectorPanel(QWidget):
         self._subtitle_label.setText(self._empty_message)
         self._favorite_label.setText("")
         self._album_value.setText("—")
-        self._format_value.setText("—")
         self._duration_value.setText("—")
         self._path_value.setText("—")
         self._note_label.setText("")
@@ -214,7 +211,6 @@ class _InspectorPanel(QWidget):
         self._subtitle_label.setText(song.artist or "未知艺术家")
         self._favorite_label.setText("已收藏" if is_favorite else "未收藏")
         self._album_value.setText(song.album or "—")
-        self._format_value.setText(song.file_format.upper() if song.file_format else "—")
         duration_seconds = int(song.duration or 0)
         self._duration_value.setText(f"{duration_seconds // 60}:{duration_seconds % 60:02d}")
         self._path_value.setText(song.file_path or "—")

@@ -62,13 +62,10 @@ def _build_song(item: dict) -> Song | None:
     title = (item.get("name") or "").strip()
     if not title:
         return None
-    file_format = (
-        _normalise_format(item.get("format") or item.get("file_format"))
-        or _format_from_url(item.get("url", ""))
-        or "mp3"
-    )
+    # Format is left empty — it is detected from the actual file content at
+    # download time (_select_audio_format) or at play time (audio engine).
     return Song(title=title, artist=(item.get("artist") or "").strip() or "未知艺术家",
-                file_path=_abs(item.get("url", "")), file_format=file_format,
+                file_path=_abs(item.get("url", "")), file_format="",
                 duration=float(item.get("duration") or 0))
 
 
@@ -88,12 +85,6 @@ def _normalise_format(value: object) -> str:
     if not re.fullmatch(r"[a-z0-9]{1,8}", cleaned):
         return ""
     return cleaned
-
-
-def _format_from_url(url: str) -> str:
-    suffix = Path(unquote(urlparse(url).path)).suffix
-    return _normalise_format(suffix)
-
 
 def _format_from_content_disposition(value: str | None) -> str:
     if not value:
@@ -158,10 +149,9 @@ def _select_audio_format(headers: object, url: str, first_chunk: bytes,
     content_type = _header_value(headers, "Content-Type")
     fallback_format = _normalise_format(fallback)
     return (
-        _format_from_content_disposition(content_disposition)
-        or _format_from_magic(first_chunk)
+        _format_from_magic(first_chunk)
         or _format_from_content_type(content_type)
-        or _format_from_url(url)
+        or _format_from_content_disposition(content_disposition)
         or fallback_format
         or "mp3"
     )
