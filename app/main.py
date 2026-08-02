@@ -63,7 +63,7 @@ def _set_default_font(app: QApplication) -> None:
     app.setFont(font)
 
 
-def main() -> None:
+def main() -> int:
     """Application entry point."""
 
     # -- Qt Application --
@@ -123,7 +123,7 @@ def main() -> None:
     music_scanner.request_stop()
     music_scanner.wait(2000)
 
-    sys.exit(exit_code)
+    return exit_code
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

@@ -182,13 +182,21 @@ async function refreshStatus() {
   } catch (e) { /* polling */ }
 }
 
-document.getElementById('seekBar').addEventListener('mousedown', () => { seekBar.dragging = true; });
-document.getElementById('seekBar').addEventListener('mouseup', function () {
+document.getElementById('seekBar').addEventListener('mousedown', function(e) {
+  e.stopPropagation();
+  seekBar.dragging = true;
+});
+document.getElementById('seekBar').addEventListener('mouseup', function(e) {
+  e.stopPropagation();
   seekBar.dragging = false;
   cmd('seek/' + this.value);
 });
-document.getElementById('seekBar').addEventListener('touchstart', () => { seekBar.dragging = true; });
-document.getElementById('seekBar').addEventListener('touchend', function () {
+document.getElementById('seekBar').addEventListener('touchstart', function(e) {
+  e.stopPropagation();
+  seekBar.dragging = true;
+});
+document.getElementById('seekBar').addEventListener('touchend', function(e) {
+  e.stopPropagation();
   seekBar.dragging = false;
   cmd('seek/' + this.value);
 });

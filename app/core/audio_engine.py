@@ -225,7 +225,9 @@ class AudioDecoder(QThread):
     def __init__(self, parent: Optional[QObject] = None) -> None:
         super().__init__(parent)
         self._file_path: str = ""
-        self._seek_pos_ms: int = -1   # -1 means "no pending seek"
+        # Seek target applied ONCE at the start of run(), before the decode
+        # loop.  No in-flight seek commands — avoids race with finished signal.
+        self._start_position_ms: int = 0
         self._stop_requested: bool = False
         self._mutex = QMutex()
 
@@ -240,14 +242,17 @@ class AudioDecoder(QThread):
     # Public API (thread-safe)
     # ------------------------------------------------------------------
 
-    def configure(self, file_path: str) -> None:
-        """Set the file to decode.  Safe to call before start()."""
-        self._file_path = file_path
+    def configure(self, file_path: str, start_position_ms: int = 0) -> None:
+        """Set the file to decode and an optional start position.
 
-    def request_seek(self, position_ms: int) -> None:
-        """Schedule a seek to *position_ms*.  Handled on the next decode loop iteration."""
-        with QMutexLocker(self._mutex):
-            self._seek_pos_ms = position_ms
+        The decoder does a one-shot seek to *start_position_ms* at the
+        beginning of :meth:`run`, before entering the decode loop.  This
+        is the only seek mechanism — there is no "request seek mid-decode"
+        API because it causes a race with ``finished`` that can kill
+        playback (the old "seek → next track" bug).
+        """
+        self._file_path = file_path
+        self._start_position_ms = max(0, start_position_ms)
 
     def request_stop(self) -> None:
         """Ask the decoder thread to exit as soon as possible."""
@@ -274,7 +279,6 @@ class AudioDecoder(QThread):
                 return
 
             # --- duration ---
-            # PyAV duration is in AV_TIME_BASE (microseconds).
             duration_ms = 0
             if container.duration and container.duration > 0:
                 duration_ms = int(container.duration // 1000)
@@ -285,19 +289,32 @@ class AudioDecoder(QThread):
             if duration_ms > 0:
                 self.duration_changed.emit(duration_ms)
 
-            # Log stream properties for debugging.
+            # --- initial seek (if requested) ---
+            # This replaces the old "request_seek during decode" approach.
+            # Seeking BEFORE the decode loop means:
+            #   1. No race with the finished signal.
+            #   2. No stale PCM data in the buffer that needs discarding.
+            #   3. The decoder simply behaves as if the file started here.
+            if self._start_position_ms > 0:
+                seek_ts = int((self._start_position_ms / 1000.0) / audio_stream.time_base)
+                container.seek(seek_ts, stream=audio_stream)
+
+            # --- log stream properties for debugging ---
             try:
+                from pathlib import Path
+                _ = Path(self._file_path).name
                 logger.info(
-                    "Decoding: %s  – fmt=%s layout=%s rate=%d",
-                    Path(self._file_path).name,
+                    "Decoding: %s – fmt=%s layout=%s rate=%d start=%dms",
+                    _,
                     getattr(audio_stream.codec_context, "format", "?"),
                     getattr(audio_stream.codec_context, "layout", "?"),
                     getattr(audio_stream.codec_context, "sample_rate", 0) or getattr(audio_stream, "sample_rate", 0),
+                    self._start_position_ms,
                 )
             except Exception:
                 pass
 
-            # --- resampler for rate changes only (lazy init) ---
+            # --- resampler for rate / format conversion (lazy init) ---
             _resampler: Optional[AudioResampler] = None
 
             def _ensure_resampler() -> AudioResampler:
@@ -315,8 +332,6 @@ class AudioDecoder(QThread):
                 if self._should_stop():
                     break
 
-                self._handle_pending_seek_v2(container, audio_stream)
-
                 for frame in packet.decode():
                     if self._should_stop():
                         break
@@ -327,14 +342,11 @@ class AudioDecoder(QThread):
                     need_rate_conv = (frame.sample_rate != TARGET_SAMPLE_RATE)
 
                     if need_rate_conv:
-                        # AudioResampler handles rate + format conversion.
                         out_frames = _ensure_resampler().resample(frame)
                         pcm = _frames_to_pcm_bytes(out_frames)
                     else:
-                        # Same rate – convert format manually.
                         pcm = _frame_to_s16_packed(frame)
                         if pcm is None:
-                            # Unsupported format – fall back to resampler.
                             out_frames = _ensure_resampler().resample(frame)
                             pcm = _frames_to_pcm_bytes(out_frames)
 
@@ -355,7 +367,7 @@ class AudioDecoder(QThread):
                 self.pcm_data_ready.emit(bytes(self._pcm_buf))
                 self._pcm_buf.clear()
 
-            # Drain the resampler (only if it was used for rate changes).
+            # Drain the resampler.
             if _resampler is not None:
                 try:
                     tail = _resampler.resample(None)
@@ -385,28 +397,6 @@ class AudioDecoder(QThread):
     def _should_stop(self) -> bool:
         with QMutexLocker(self._mutex):
             return self._stop_requested
-
-    def _handle_pending_seek_v2(self, container: av.container.Container,
-                                 stream: av.stream.Stream) -> bool:
-        """If a seek was requested since the last iteration, perform it."""
-        with QMutexLocker(self._mutex):
-            pos = self._seek_pos_ms
-            self._seek_pos_ms = -1
-
-        if pos < 0:
-            return False
-
-        try:
-            seek_ts = int((pos / 1000.0) / stream.time_base)
-            container.seek(seek_ts, stream=stream)
-            stream.codec_context.flush_buffers()
-            # Discard pre-seek accumulated PCM.
-            self._pcm_buf.clear()
-            logger.debug("Seeked to %d ms (timestamp %d)", pos, seek_ts)
-            return True
-        except Exception as exc:
-            logger.warning("Seek to %d ms failed: %s", pos, exc)
-            return False
 
 
 # ===================================================================
@@ -569,28 +559,58 @@ class AudioEngine(QObject):
     def seek(self, position_ms: int) -> None:
         """Seek to *position_ms* in the current file.
 
-        Preserves the paused/playing state — if the engine was paused
-        when seek is called the sink is re-suspended after restart so
-        that a slider drag does not unexpectedly resume playback.
+        **Why restart the whole decoder?**  The old approach tried to send a
+        seek command to a running decoder thread while simultaneously
+        stop/starting the QAudioSink.  Those two async operations raced with
+        the decoder's ``finished`` signal — if the decoder reached EOF right
+        after the seek, ``_check_finished()`` would call ``stop()`` and kill
+        the new sink, making it look like the track skipped to the next song.
+
+        By tearing everything down and creating a fresh decoder with the
+        seek position baked into ``configure()``, the ``finished`` signal
+        from the old decoder is disconnected before it can fire, and the new
+        decoder starts cleanly from the target position.  ``_track_seq``
+        provides a second layer of defence: even if a stale signal somehow
+        arrives, the sequence mismatch causes ``_check_finished()`` to bail.
         """
         if position_ms < 0:
             position_ms = 0
+        if self._decoder is None:
+            return
+
+        # Remember the file path before killing the old decoder.
+        current_file = self._decoder._file_path
         was_paused = (self._state == PlayState.PAUSED)
 
-        if self._decoder is not None:
-            self._decoder.request_seek(position_ms)
-        # Stop and restart the sink so it is in a clean Started state
-        # ready to accept new PCM data.  On Windows, reset() can leave
-        # the sink in an idle state where no audio plays.
+        # --- 1. Tear down old decoder ---
+        self._decoder.request_stop()
+        self._decoder.wait(2000)
+        self._decoder.deleteLater()
+        self._decoder = None
+
+        # --- 2. Reset sink (must be stopped before starting anew) ---
         if self._sink is not None:
             self._sink.stop()
         self._pending_buffer = b""
-        if self._sink is not None:
-            self._sink_device = self._sink.start()
-        # After restart, processedUSecs() returns 0, so we offset it.
         self._seek_offset = position_ms
 
-        # Re-apply pause if the engine was paused before the seek.
+        # --- 3. Bump sequence so stale signals are ignored ---
+        self._track_seq += 1
+
+        # --- 4. Create new decoder that starts from position_ms ---
+        self._decoder = AudioDecoder()
+        self._decoder.pcm_data_ready.connect(self._on_pcm_data)
+        self._decoder.finished.connect(self._on_decoder_finished)
+        self._decoder.duration_changed.connect(self._on_duration)
+        self._decoder.error_occurred.connect(self._on_error)
+        self._decoder.configure(current_file, start_position_ms=position_ms)
+
+        # --- 5. Restart sink and decoder ---
+        if self._sink is not None:
+            self._sink_device = self._sink.start()
+        self._decoder.start()
+
+        # --- 6. Restore pause state ---
         if was_paused and self._sink is not None:
             self._sink.suspend()
 

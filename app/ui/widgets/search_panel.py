@@ -178,10 +178,35 @@ class SearchPanel(QWidget):
 
         layout.addLayout(btn_layout)
 
+        # --- Page navigation ---
+        page_layout = QHBoxLayout()
+        page_layout.setSpacing(6)
+
+        self._prev_page_btn = QPushButton("⬅ 上一页")
+        self._prev_page_btn.clicked.connect(self._on_prev_page)
+        self._prev_page_btn.setEnabled(False)
+        page_layout.addWidget(self._prev_page_btn)
+
+        self._page_label = QLabel("第 1 页")
+        self._page_label.setStyleSheet("color: #83909E; font-size: 12px; padding: 4px 8px;")
+        self._page_label.setAlignment(Qt.AlignCenter)
+        page_layout.addWidget(self._page_label)
+
+        self._next_page_btn = QPushButton("下一页 ➡")
+        self._next_page_btn.clicked.connect(self._on_next_page)
+        self._next_page_btn.setEnabled(False)
+        page_layout.addWidget(self._next_page_btn)
+
+        layout.addLayout(page_layout)
+
         # --- State ---
         self._results: list[Song] = []
         self._search_provider: Any = None  # Will be set by MainWindow
         self._download_dir: str = ""
+        self._current_page: int = 1
+        self._is_last_page: bool = False
+        self._current_keyword: str = ""
+        self._current_source: str = "netease"
         self._refresh_download_tooltip()
 
         # Enable buttons when result(s) are selected.
@@ -228,9 +253,16 @@ class SearchPanel(QWidget):
             self._status_label.setText("未找到结果")
             self._status_label.show()
             self._clear_btn.setEnabled(False)
+            self._prev_page_btn.setEnabled(False)
+            self._next_page_btn.setEnabled(False)
             self.results_changed.emit(0)
             self.selection_changed.emit(None)
             return
+
+        # Determine if this is the last page:
+        # - Less than 10 songs means it's the last page
+        # - Page 10 is always the last page (maximum 10 pages allowed)
+        self._is_last_page = len(songs) < 10 or self._current_page >= 10
 
         self._status_label.hide()
         for song in songs:
@@ -242,6 +274,12 @@ class SearchPanel(QWidget):
 
         self._results_list.setCurrentRow(0)
         self._clear_btn.setEnabled(True)
+        self._page_label.setText(f"第 {self._current_page} 页")
+
+        # Enable/disable page navigation buttons
+        self._prev_page_btn.setEnabled(self._current_page > 1)
+        self._next_page_btn.setEnabled(not self._is_last_page)
+
         self.results_changed.emit(len(songs))
         self.selection_changed.emit(self.selected_song())
 
@@ -260,6 +298,12 @@ class SearchPanel(QWidget):
         self._add_btn.setEnabled(False)
         self._download_btn.setEnabled(False)
         self._clear_btn.setEnabled(False)
+        self._prev_page_btn.setEnabled(False)
+        self._next_page_btn.setEnabled(False)
+        self._page_label.setText("第 1 页")
+        self._current_page = 1
+        self._is_last_page = False
+        self._current_keyword = ""
         self.results_changed.emit(0)
         self.selection_changed.emit(None)
 
@@ -267,22 +311,28 @@ class SearchPanel(QWidget):
     # Internal slots
     # ------------------------------------------------------------------
 
-    def _on_search(self) -> None:
+    def _on_search(self, page: int = 1) -> None:
         """Trigger a search via the configured provider."""
         keyword = self._search_input.text().strip()
         if not keyword:
             return
 
-        self._status_label.setText("搜索中…")
+        self._current_keyword = keyword
+        self._current_source = self._source_combo.currentData()
+        self._current_page = page
+
+        self._status_label.setText(f"搜索中… (第 {page} 页)")
         self._status_label.show()
         self._results_list.clear()
         self._add_btn.setEnabled(False)
         self._download_btn.setEnabled(False)
         self._clear_btn.setEnabled(False)
+        self._prev_page_btn.setEnabled(False)
+        self._next_page_btn.setEnabled(False)
 
         if self._search_provider is not None and hasattr(self._search_provider, "search"):
             source = self._source_combo.currentData()
-            self._search_provider.search(keyword, source=source)
+            self._search_provider.search(keyword, page=page, source=source)
         else:
             self._status_label.setText("未配置搜索服务")
 
@@ -312,6 +362,16 @@ class SearchPanel(QWidget):
             row = self._results_list.row(item)
             if 0 <= row < len(self._results):
                 self.download_requested.emit(self._results[row])
+
+    def _on_prev_page(self) -> None:
+        """Navigate to the previous page."""
+        if self._current_page > 1:
+            self._on_search(self._current_page - 1)
+
+    def _on_next_page(self) -> None:
+        """Navigate to the next page."""
+        if not self._is_last_page:
+            self._on_search(self._current_page + 1)
 
     def resizeEvent(self, event) -> None:
         """Keep custom result widgets stretched to the full list width."""

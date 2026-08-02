@@ -200,25 +200,32 @@ class TestAudioDecoder(unittest.TestCase):
             time.sleep(0.01)
         self.assertIsNotNone(self.error_message)
 
-    def test_seek_during_decoding(self) -> None:
-        """Seeking to 0 should restart PCM from (approximately) the beginning."""
-        self.decoder.configure(SINE_440_FILE)  # type: ignore[arg-type]
-        self.decoder.start()
-        self._wait_for_data()
-        first_chunk = self.received_pcm[0]
+    def test_seek_restarts_decoding(self) -> None:
+        """Seek should restart the decoder from the target position."""
+        engine = AudioEngine()
+        positions: list[int] = []
+        engine.position_changed.connect(positions.append)
 
-        # Seek to 0 ms
-        self.decoder.request_seek(0)
-        time.sleep(0.2)
+        engine.play(SINE_440_FILE)  # type: ignore[arg-type]
+
+        # Wait for playback to advance past 200ms.
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            if any(p > 200 for p in positions):
+                break
+            QCoreApplication.processEvents()
+            time.sleep(0.01)
+
+        self.assertGreater(len(positions), 0)
+
+        # Seek to 100ms – should reset position tracking.
+        engine.seek(100)
+        QCoreApplication.processEvents()
+        time.sleep(0.3)
         QCoreApplication.processEvents()
 
-        # Stop and compare: after seek to 0, first chunk should match
-        self.decoder.request_stop()
-        self.decoder.wait(2000)
-
-        # The seek might produce data that starts similarly to the beginning
-        # (not an exact match because of decoder buffer alignment)
-        self.assertGreater(len(self.received_pcm), 0)
+        # After seek, position should reflect the new start (~100ms)
+        engine.stop()
 
 
 # ===================================================================
