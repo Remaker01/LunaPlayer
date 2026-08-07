@@ -396,12 +396,6 @@ class SearchPanel(QWidget):
             # Give the widget a fixed width so its layout can compute
             # the correct height for wrapped text.
             widget.setFixedWidth(viewport_width)
-            hint = widget.sizeHint()
-            hint.setWidth(viewport_width)
-            item.setSizeHint(hint)
-            widget = self._results_list.itemWidget(item)
-            if widget is None:
-                continue
             height = max(widget.sizeHint().height(), 54)
             item.setSizeHint(QSize(viewport_width, height))
 

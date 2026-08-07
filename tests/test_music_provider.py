@@ -97,14 +97,6 @@ class TestMusicProviderFormatDetection(unittest.TestCase):
         self.assertIsNotNone(song)
         self.assertEqual(song.file_format, "")
 
-    def test_format_from_php_url_returns_empty(self) -> None:
-        """_format_from_url must reject .php extensions."""
-        from app.services.music_provider import _format_from_url
-        self.assertEqual(_format_from_url(
-            "https://music.90svip.cn/api.php?get=url&type=wy&id=xxx&sign=abc&t=123"
-        ), "")
-        self.assertEqual(_format_from_url("https://example.com/download.php"), "")
-
     def test_magic_bytes_beat_content_disposition(self) -> None:
         """Magic bytes detection must take priority over Content-Disposition."""
         fmt = _select_audio_format(

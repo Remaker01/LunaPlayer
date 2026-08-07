@@ -14,7 +14,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QCoreApplication
 
-from app.core.music_scanner import MusicScanner, extract_metadata, _compute_hash
+from app.core.music_scanner import MusicScanner, extract_metadata
+from app.services.audio_metadata import compute_hash
 from app.models.song import Song
 from tests.test_base import create_test_wav, ensure_qapp
 
@@ -80,8 +81,8 @@ class TestComputeHash(unittest.TestCase):
             handle.write(b"hello world")
             path = handle.name
         try:
-            h1 = _compute_hash(path)
-            h2 = _compute_hash(path)
+            h1 = compute_hash(path)
+            h2 = compute_hash(path)
             self.assertEqual(h1, h2)
             self.assertEqual(len(h1), 64)
         finally:
@@ -95,7 +96,7 @@ class TestComputeHash(unittest.TestCase):
             handle.write(b"file b")
             path_b = handle.name
         try:
-            self.assertNotEqual(_compute_hash(path_a), _compute_hash(path_b))
+            self.assertNotEqual(compute_hash(path_a), compute_hash(path_b))
         finally:
             Path(path_a).unlink(missing_ok=True)
             Path(path_b).unlink(missing_ok=True)

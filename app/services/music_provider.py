@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import logging, re
 from pathlib import Path
-from urllib.parse import quote, unquote, urlencode, urljoin, urlparse
+from urllib.parse import quote, unquote, urlencode, urljoin
 
 import urllib3
 from PySide6.QtCore import QObject, QThread, Signal

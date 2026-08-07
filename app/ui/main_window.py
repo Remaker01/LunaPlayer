@@ -833,9 +833,9 @@ class MainWindow(QMainWindow):
         volume_row.addWidget(self._volume_label)
         right_layout.addLayout(volume_row)
 
-        self._playback_hint_label = QLabel("空格键 播放 / 暂停")
-        self._playback_hint_label.setObjectName("timeLabel")
-        right_layout.addWidget(self._playback_hint_label, 0, Qt.AlignRight)
+        playback_hint = QLabel("空格键 播放 / 暂停")
+        playback_hint.setObjectName("timeLabel")
+        right_layout.addWidget(playback_hint, 0, Qt.AlignRight)
         right_layout.addStretch(1)
         layout.addWidget(right_section, 0)
 
@@ -951,7 +951,7 @@ class MainWindow(QMainWindow):
         )
         self._playlist_manager.clear_session_state()
         if not songs:
-            self._reset_cover_art()
+            pass  # Preserve current song label during reorder
         # Preserve the current song label — _on_playlist_loaded is also
         # triggered by drag-and-drop reorder, and blowing away the info
         # text to "未播放" would be wrong while a track is still active.
@@ -991,7 +991,6 @@ class MainWindow(QMainWindow):
         playback starts normally.
         """
         if song is not None and song.file_path:
-            self._update_cover_art(song)
             if self._restore_selection_only:
                 self._restore_selection_only = False
                 self._progress_slider.setRange(0, 0)
@@ -1009,7 +1008,6 @@ class MainWindow(QMainWindow):
         else:
             # Song removed / playlist cleared → stop playback.
             self._audio_engine.stop()
-            self._reset_cover_art()
 
         self._update_song_info(song)
 
@@ -1389,9 +1387,6 @@ class MainWindow(QMainWindow):
             with open(path, "w", encoding="utf-8") as f:
                 f.write("#EXTM3U\n")
                 for song in songs:
-                    minutes = int(song.duration) // 60
-                    seconds = int(song.duration) % 60
-                    duration_str = f"{minutes}:{seconds:02d}"
                     f.write(f"#EXTINF:{int(song.duration)},{song.artist} - {song.title}\n")
                     f.write(f"{song.file_path}\n")
             self._status_label.setText(f"已导出 {len(songs)} 首歌曲到 {Path(path).name}.")
@@ -1837,13 +1832,6 @@ class MainWindow(QMainWindow):
         if not file_path or file_path.startswith(("http://", "https://")):
             return False
         return Path(file_path).suffix != ""
-
-    def _update_cover_art(self, song: Song) -> None:
-        """Keep playback-bar cover handling disabled; inspectors own artwork now."""
-        del song
-
-    def _reset_cover_art(self) -> None:
-        """Playback bar no longer renders artwork."""
 
     def _normalize_session_state(self, state: dict[str, object]) -> dict[str, object]:
         """Coerce persisted session metadata into a predictable shape."""

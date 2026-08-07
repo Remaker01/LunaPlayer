@@ -14,7 +14,7 @@ from typing import Optional, Set
 from PySide6.QtCore import QMutex, QMutexLocker, QObject, QThread, Signal
 
 from app.models.song import Song
-from app.services.audio_metadata import compute_hash, extract_song_metadata
+from app.services.audio_metadata import extract_song_metadata
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +155,3 @@ def extract_metadata(file_path: str) -> Optional[Song]:
 # ===================================================================
 # Module-level helpers
 # ===================================================================
-
-def _compute_hash(file_path: str) -> str:
-    """SHA-256 hex digest of the file contents."""
-    return compute_hash(file_path)

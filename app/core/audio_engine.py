@@ -25,7 +25,7 @@ from typing import Optional
 from PySide6.QtCore import QIODevice, QMutex, QMutexLocker, QObject, QThread, QTimer, Signal
 from PySide6.QtMultimedia import QAudioFormat, QAudioSink, QMediaDevices
 
-import av.container, av.stream
+import av.container
 from av.audio.resampler import AudioResampler
 
 # ---------------------------------------------------------------------------
@@ -582,22 +582,30 @@ class AudioEngine(QObject):
         current_file = self._decoder._file_path
         was_paused = (self._state == PlayState.PAUSED)
 
-        # --- 1. Tear down old decoder ---
+        # --- 1. Bump sequence BEFORE teardown so any stale finished signal
+        #     from the old decoder is ignored by _check_finished ---
+        self._track_seq += 1
+
+        # --- 2. Disconnect old decoder signals so they cannot fire
+        #     after the new decoder is already connected ---
+        self._decoder.pcm_data_ready.disconnect(self._on_pcm_data)
+        self._decoder.finished.disconnect(self._on_decoder_finished)
+        self._decoder.duration_changed.disconnect(self._on_duration)
+        self._decoder.error_occurred.disconnect(self._on_error)
+
+        # --- 3. Tear down old decoder ---
         self._decoder.request_stop()
         self._decoder.wait(2000)
         self._decoder.deleteLater()
         self._decoder = None
 
-        # --- 2. Reset sink (must be stopped before starting anew) ---
+        # --- 4. Reset sink (must be stopped before starting anew) ---
         if self._sink is not None:
             self._sink.stop()
         self._pending_buffer = b""
         self._seek_offset = position_ms
 
-        # --- 3. Bump sequence so stale signals are ignored ---
-        self._track_seq += 1
-
-        # --- 4. Create new decoder that starts from position_ms ---
+        # --- 5. Create new decoder that starts from position_ms ---
         self._decoder = AudioDecoder()
         self._decoder.pcm_data_ready.connect(self._on_pcm_data)
         self._decoder.finished.connect(self._on_decoder_finished)
@@ -605,12 +613,12 @@ class AudioEngine(QObject):
         self._decoder.error_occurred.connect(self._on_error)
         self._decoder.configure(current_file, start_position_ms=position_ms)
 
-        # --- 5. Restart sink and decoder ---
+        # --- 6. Restart sink and decoder ---
         if self._sink is not None:
             self._sink_device = self._sink.start()
         self._decoder.start()
 
-        # --- 6. Restore pause state ---
+        # --- 7. Restore pause state ---
         if was_paused and self._sink is not None:
             self._sink.suspend()
 
