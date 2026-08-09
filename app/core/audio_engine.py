@@ -27,6 +27,7 @@ from PySide6.QtMultimedia import QAudioFormat, QAudioSink, QMediaDevices
 
 import av.container
 from av.audio.resampler import AudioResampler
+from av.error import InvalidDataError
 
 # ---------------------------------------------------------------------------
 # Helper: convert a decoded AudioFrame to packed s16le PCM bytes
@@ -332,31 +333,47 @@ class AudioDecoder(QThread):
                 if self._should_stop():
                     break
 
-                for frame in packet.decode():
-                    if self._should_stop():
-                        break
-                    if frame is None:
-                        continue
+                # A corrupt packet (e.g. trailing garbage after a truncated
+                # MP3) makes avcodec_send_packet return AVERROR_INVALIDDATA,
+                # which PyAV surfaces as InvalidDataError while iterating the
+                # decoded frames.  Treating that as fatal kills the whole
+                # track right at its end, so playback stops with an error
+                # instead of advancing to the next song.  Skip the bad packet
+                # and keep decoding — this matches ffplay's behaviour.
+                try:
+                    for frame in packet.decode():
+                        if self._should_stop():
+                            break
+                        if frame is None:
+                            continue
 
-                    # Determine if rate conversion is needed.
-                    need_rate_conv = (frame.sample_rate != TARGET_SAMPLE_RATE)
+                        # Determine if rate conversion is needed.
+                        need_rate_conv = (frame.sample_rate != TARGET_SAMPLE_RATE)
 
-                    if need_rate_conv:
-                        out_frames = _ensure_resampler().resample(frame)
-                        pcm = _frames_to_pcm_bytes(out_frames)
-                    else:
-                        pcm = _frame_to_s16_packed(frame)
-                        if pcm is None:
+                        if need_rate_conv:
                             out_frames = _ensure_resampler().resample(frame)
                             pcm = _frames_to_pcm_bytes(out_frames)
+                        else:
+                            pcm = _frame_to_s16_packed(frame)
+                            if pcm is None:
+                                out_frames = _ensure_resampler().resample(frame)
+                                pcm = _frames_to_pcm_bytes(out_frames)
 
-                    if pcm:
-                        self._pcm_buf.extend(pcm)
+                        if pcm:
+                            self._pcm_buf.extend(pcm)
 
-                    # Emit batched PCM when buffer is full enough.
-                    if len(self._pcm_buf) >= PCM_BATCH_SIZE:
-                        self.pcm_data_ready.emit(bytes(self._pcm_buf))
-                        self._pcm_buf.clear()
+                        # Emit batched PCM when buffer is full enough.
+                        if len(self._pcm_buf) >= PCM_BATCH_SIZE:
+                            self.pcm_data_ready.emit(bytes(self._pcm_buf))
+                            self._pcm_buf.clear()
+                except InvalidDataError as exc:
+                    # Packet-level corruption is not fatal — log and move on
+                    # to the next packet.
+                    logger.warning(
+                        "Skipping undecodable packet in %s: %s",
+                        self._file_path, exc,
+                    )
+                    continue
 
                 # Back-pressure to protect the main thread.
                 if self._engine_pending_bytes > MAX_PENDING_BYTES:

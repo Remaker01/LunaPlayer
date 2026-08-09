@@ -143,13 +143,7 @@ class MusicScanner(QThread):
 # Module-level helpers
 # ===================================================================
 
-def extract_metadata(file_path: str) -> Optional[Song]:
-    """Extract metadata from *file_path* using mutagen.
-
-    Returns a :class:`Song` instance, or ``None`` if the file cannot
-    be parsed.
-    """
-    return extract_song_metadata(file_path)
+extract_metadata = extract_song_metadata
 
 
 # ===================================================================
