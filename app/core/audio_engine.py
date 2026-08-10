@@ -49,8 +49,6 @@ def _frame_to_s16_packed(frame) -> Optional[bytearray]:
       flt/fltp   – 32-bit float    (packed / planar)
       dbl/dblp   – 64-bit float    (packed / planar)  → float64 → int16
     """
-    import struct
-
     try:
         fmt_name = frame.format.name if hasattr(frame.format, "name") else str(frame.format)
     except Exception:
@@ -61,10 +59,7 @@ def _frame_to_s16_packed(frame) -> Optional[bytearray]:
         return bytearray()
 
     ns = int(frame.samples)            # valid samples per channel
-    try:
-        nc = int(frame.layout.channels)
-    except Exception:
-        nc = n_planes if n_planes > 1 else 2  # assume stereo for packed
+    nc = frame.layout.nb_channels
     if ns <= 0:
         return bytearray()
 
@@ -82,68 +77,64 @@ def _frame_to_s16_packed(frame) -> Optional[bytearray]:
     # ── 1. s16 / s16p ──────────────────────────────────────────────
     if is_s16:
         if n_planes == 1:
-            # Packed s16: valid bytes = ns * nc * 2
             nbytes = int(ns * nc * 2)
             return bytearray(memoryview(planes[0])[:nbytes])
-        # Planar s16p: ns samples per plane.
-        views = [memoryview(p).cast("h") for p in planes]
-        buf = bytearray()
-        for i in range(ns):
-            for v in views:
-                buf.extend(v[i].to_bytes(2, "little", signed=True))
+        # Planar s16p: interleave via zero-copy stride assignment.
+        buf = bytearray(ns * nc * 2)
+        mv = memoryview(buf).cast("h")
+        for ch in range(min(nc, n_planes)):
+            mv[ch::nc] = memoryview(planes[ch]).cast("h")[:ns]
         return buf
 
     # ── 2. s32 / s32p (downscale 32→16 bit) ────────────────────────
     if is_s32:
         if n_planes == 1:
-            # Packed s32: valid int32 values = ns * nc
-            nvals = ns * nc
-            data = memoryview(planes[0]).cast("i")
-            buf = bytearray()
-            for val in data[:nvals]:
-                s16 = max(-32768, min(32767, val >> 16))
-                buf.extend(struct.pack("<h", s16))
+            data = memoryview(planes[0]).cast("i")[: ns * nc]
+            buf = bytearray(len(data) * 2)
+            mv = memoryview(buf).cast("h")
+            for i, val in enumerate(data):
+                mv[i] = max(-32768, min(32767, val >> 16))
             return buf
-        views = [memoryview(p).cast("i") for p in planes]
-        buf = bytearray()
-        for i in range(ns):
-            for v in views:
-                s16 = max(-32768, min(32767, v[i] >> 16))
-                buf.extend(struct.pack("<h", s16))
+        buf = bytearray(ns * nc * 2)
+        mv = memoryview(buf).cast("h")
+        for ch in range(min(nc, n_planes)):
+            src = memoryview(planes[ch]).cast("i")[:ns]
+            for i in range(ns):
+                mv[ch + i * nc] = max(-32768, min(32767, src[i] >> 16))
         return buf
 
     # ── 3. flt / fltp ──────────────────────────────────────────────
     if is_float:
         if n_planes == 1:
-            data = memoryview(planes[0]).cast("f")
-            buf = bytearray()
-            for val in data[: ns * nc]:
-                s16 = int(max(-1.0, min(1.0, val)) * 32767)
-                buf.extend(struct.pack("<h", s16))
+            data = memoryview(planes[0]).cast("f")[: ns * nc]
+            buf = bytearray(len(data) * 2)
+            mv = memoryview(buf).cast("h")
+            for i, val in enumerate(data):
+                mv[i] = int(max(-1.0, min(1.0, val)) * 32767)
             return buf
-        views = [memoryview(p).cast("f") for p in planes]
-        buf = bytearray()
-        for i in range(ns):
-            for v in views:
-                s16 = int(max(-1.0, min(1.0, v[i])) * 32767)
-                buf.extend(struct.pack("<h", s16))
+        buf = bytearray(ns * nc * 2)
+        mv = memoryview(buf).cast("h")
+        for ch in range(min(nc, n_planes)):
+            src = memoryview(planes[ch]).cast("f")[:ns]
+            for i in range(ns):
+                mv[ch + i * nc] = int(max(-1.0, min(1.0, src[i])) * 32767)
         return buf
 
     # ── 4. dbl / dblp (float64 → int16) ────────────────────────────
     if is_double:
         if n_planes == 1:
-            data = memoryview(planes[0]).cast("d")
-            buf = bytearray()
-            for val in data[: ns * nc]:
-                s16 = int(max(-1.0, min(1.0, val)) * 32767)
-                buf.extend(struct.pack("<h", s16))
+            data = memoryview(planes[0]).cast("d")[: ns * nc]
+            buf = bytearray(len(data) * 2)
+            mv = memoryview(buf).cast("h")
+            for i, val in enumerate(data):
+                mv[i] = int(max(-1.0, min(1.0, val)) * 32767)
             return buf
-        views = [memoryview(p).cast("d") for p in planes]
-        buf = bytearray()
-        for i in range(ns):
-            for v in views:
-                s16 = int(max(-1.0, min(1.0, v[i])) * 32767)
-                buf.extend(struct.pack("<h", s16))
+        buf = bytearray(ns * nc * 2)
+        mv = memoryview(buf).cast("h")
+        for ch in range(min(nc, n_planes)):
+            src = memoryview(planes[ch]).cast("d")[:ns]
+            for i in range(ns):
+                mv[ch + i * nc] = int(max(-1.0, min(1.0, src[i])) * 32767)
         return buf
 
     return None

@@ -5,7 +5,7 @@ from __future__ import annotations
 APP_NAME = "LunaPlayer"
 APP_ORGANIZATION = "LunaPlayer"
 APP_DISPLAY_NAME = "LunaPlayer - 音乐播放器"
-APP_VERSION = "1.0.0-Beta2"
+APP_VERSION = "1.0.0"
 
 window_title = f"{APP_DISPLAY_NAME} {APP_VERSION}"
 about_title = f"关于 {APP_NAME}"
