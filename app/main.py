@@ -79,7 +79,7 @@ def main() -> int:
     _load_stylesheet(app)
 
     # -- Application icon --
-    icon_path = Path(__file__).parent.parent / "resources" / "icon.ico"
+    icon_path = Path(__file__).parent.parent / "resources" / "icon.png"
     if icon_path.exists():
         from PySide6.QtGui import QIcon
         app.setWindowIcon(QIcon(str(icon_path)))

@@ -1065,8 +1065,18 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_clear_requested(self) -> None:
-        """Clear the entire playlist."""
-        self._playlist_manager.clear()
+        """Clear the entire playlist after a confirmation prompt."""
+        if len(self._playlist_manager.playlist) == 0:
+            return
+        answer = QMessageBox.question(
+            self,
+            "清空播放列表",
+            f"确定要清空当前播放列表（共 {count} 首歌曲）吗？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if answer == QMessageBox.Yes:
+            self._playlist_manager.clear()
 
     @Slot(list)
     def _on_order_changed(self, songs: list[Song]) -> None:
