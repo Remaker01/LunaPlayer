@@ -42,7 +42,6 @@ class TestSong(unittest.TestCase):
             duration=199.5,
             file_path="/tmp/song.mp3",
             file_format="mp3",
-            file_hash="abc123",
         )
         self.assertEqual(song.id, 42)
         self.assertEqual(song.title, "Hello")
@@ -51,7 +50,6 @@ class TestSong(unittest.TestCase):
         self.assertEqual(song.duration, 199.5)
         self.assertEqual(song.file_path, "/tmp/song.mp3")
         self.assertEqual(song.file_format, "mp3")
-        self.assertEqual(song.file_hash, "abc123")
 
     def test_post_init_normalises_none(self) -> None:
         """String fields should be turned into empty strings when None is passed."""

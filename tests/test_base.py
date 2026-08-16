@@ -48,16 +48,16 @@ def create_test_wav(
 SAMPLE_SONGS: List[Song] = [
     Song(title="Song A", artist="Artist 1", album="Album X",
          duration=210.0, file_path="/music/a.mp3",
-         file_format="mp3", file_hash="aaa"),
+         file_format="mp3"),
     Song(title="Song B", artist="Artist 1", album="Album X",
          duration=180.0, file_path="/music/b.flac",
-         file_format="flac", file_hash="bbb"),
+         file_format="flac"),
     Song(title="Song C", artist="Artist 2", album="Album Y",
          duration=240.0, file_path="/music/c.wav",
-         file_format="wav", file_hash="ccc"),
+         file_format="wav"),
     Song(title="Song D", artist="Artist 2", album="Album Y",
          duration=200.0, file_path="/music/d.aac",
-         file_format="aac", file_hash="ddd"),
+         file_format="aac"),
 ]
 
 

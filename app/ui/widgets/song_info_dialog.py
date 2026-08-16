@@ -166,7 +166,6 @@ class SongInfoDialog(QDialog):
             ("编码", "codec"),
             ("位深", "bit_depth"),
             ("压缩比", "compression"),
-            ("文件哈希", "hash"),
         ]
         for label, key in fields:
             value_label = QLabel()
@@ -209,7 +208,6 @@ class SongInfoDialog(QDialog):
         self._form_rows["duration"].setText(_format_duration(song.duration))
         self._form_rows["format"].setText(song.file_format.upper() if song.file_format else "未知")
         self._form_rows["path"].setText(song.file_path)
-        self._form_rows["hash"].setText(song.file_hash or "（未计算）")
 
         # Technical metadata from mutagen
         if song.file_path:

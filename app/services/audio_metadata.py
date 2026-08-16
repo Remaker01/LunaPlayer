@@ -4,15 +4,12 @@ Shared helpers for reading local audio metadata and embedded cover art.
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 from typing import Optional
 
 import mutagen
 
 from app.models.song import Song
-
-_HASH_BLOCK_SIZE = 64 * 1024  # 64 KB
 
 
 def extract_song_metadata(file_path: str) -> Optional[Song]:
@@ -40,7 +37,6 @@ def extract_song_metadata(file_path: str) -> Optional[Song]:
         duration=duration,
         file_path=resolved_path,
         file_format=Path(resolved_path).suffix.lower().lstrip("."),
-        file_hash=compute_hash(resolved_path),
     )
 
 
@@ -96,18 +92,6 @@ def extract_cover_art(file_path: str) -> Optional[bytes]:
             return bytes(data)
 
     return None
-
-
-def compute_hash(file_path: str) -> str:
-    """SHA-256 hex digest of the file contents."""
-    sha = hashlib.sha256()
-    with open(file_path, "rb") as handle:
-        while True:
-            block = handle.read(_HASH_BLOCK_SIZE)
-            if not block:
-                break
-            sha.update(block)
-    return sha.hexdigest()
 
 
 def _tag_str(audio: mutagen.FileType, key: str, default: str = "") -> str:

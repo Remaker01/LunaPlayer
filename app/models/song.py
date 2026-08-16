@@ -30,11 +30,10 @@ class Song:
     duration: float = 0.0  # Duration in seconds.
     file_path: str = ""
     file_format: str = ""
-    file_hash: str = ""    # SHA-256 hex digest for deduplication.
 
     def __post_init__(self) -> None:
         """Normalise string fields to avoid accidental None."""
-        for field_name in ("title", "artist", "album", "file_path", "file_format", "file_hash"):
+        for field_name in ("title", "artist", "album", "file_path", "file_format"):
             value = getattr(self, field_name)
             if value is None:
                 object.__setattr__(self, field_name, "")

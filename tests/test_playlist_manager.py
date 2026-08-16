@@ -326,7 +326,6 @@ class TestPlaylistPersistence(PlaylistManagerTestCase):
                             duration=0.3,
                             file_path=str(file_path),
                             file_format="wav",
-                            file_hash=f"hash-{idx}",
                         )
                     )
 
@@ -364,7 +363,6 @@ class TestPlaylistPersistence(PlaylistManagerTestCase):
                     artist="Ghost",
                     file_path=str((Path(tmp_home) / "gone.mp3").resolve()),
                     file_format="mp3",
-                    file_hash="gone-hash",
                 )
                 self.manager.load_playlist([missing_song], start_index=0)
                 self.manager.save_to_m3u()

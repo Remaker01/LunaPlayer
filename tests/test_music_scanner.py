@@ -15,7 +15,6 @@ from pathlib import Path
 from PySide6.QtCore import QCoreApplication
 
 from app.core.music_scanner import MusicScanner, extract_metadata
-from app.services.audio_metadata import compute_hash
 from app.models.song import Song
 from tests.test_base import create_test_wav, ensure_qapp
 
@@ -57,11 +56,6 @@ class TestExtractMetadata(unittest.TestCase):
         self.assertIsNotNone(song)
         self.assertEqual(song.file_format, "wav")
 
-    def test_hash_is_non_empty(self) -> None:
-        song = extract_metadata(self.wav_path)
-        self.assertIsNotNone(song)
-        self.assertTrue(len(song.file_hash) > 0)
-
     def test_returns_none_for_unsupported_file(self) -> None:
         txt = os.path.join(self._tmpdir, "readme.txt")
         Path(txt).write_text("hello")
@@ -71,35 +65,6 @@ class TestExtractMetadata(unittest.TestCase):
     def test_returns_none_for_nonexistent_file(self) -> None:
         song = extract_metadata("/nonexistent.wav")
         self.assertIsNone(song)
-
-
-class TestComputeHash(unittest.TestCase):
-    """SHA-256 hash computation."""
-
-    def test_hash_is_consistent(self) -> None:
-        with tempfile.NamedTemporaryFile(suffix=".dat", delete=False) as handle:
-            handle.write(b"hello world")
-            path = handle.name
-        try:
-            h1 = compute_hash(path)
-            h2 = compute_hash(path)
-            self.assertEqual(h1, h2)
-            self.assertEqual(len(h1), 64)
-        finally:
-            Path(path).unlink(missing_ok=True)
-
-    def test_different_files_different_hash(self) -> None:
-        with tempfile.NamedTemporaryFile(suffix=".dat", delete=False) as handle:
-            handle.write(b"file a")
-            path_a = handle.name
-        with tempfile.NamedTemporaryFile(suffix=".dat", delete=False) as handle:
-            handle.write(b"file b")
-            path_b = handle.name
-        try:
-            self.assertNotEqual(compute_hash(path_a), compute_hash(path_b))
-        finally:
-            Path(path_a).unlink(missing_ok=True)
-            Path(path_b).unlink(missing_ok=True)
 
 
 class TestMusicScanner(unittest.TestCase):
@@ -219,12 +184,6 @@ class TestMusicScanner(unittest.TestCase):
         self.scanner.scan_directory(self._tmpdir)
         self._wait_for_finished()
         self.assertEqual(self.signals["errors"], [])
-
-    def test_songs_have_hash(self) -> None:
-        self.scanner.scan_directory(self._tmpdir)
-        self._wait_for_finished()
-        for song in self.signals["song_found"]:
-            self.assertTrue(len(song.file_hash) > 0)
 
     def test_songs_have_duration(self) -> None:
         self.scanner.scan_directory(self._tmpdir)
