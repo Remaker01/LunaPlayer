@@ -221,6 +221,11 @@ class AudioDecoder(QThread):
         # loop.  No in-flight seek commands — avoids race with finished signal.
         self._start_position_ms: int = 0
         self._stop_requested: bool = False
+        # Thread-safe pause flag: while set, the decode loop blocks so no
+        # further PCM is produced.  This keeps the pending buffer bounded and
+        # prevents the suspended sink from being re-filled (which would make
+        # suspend() keep playing).
+        self._paused: bool = False
         self._mutex = QMutex()
 
         # -- PCM batching accumulator --
@@ -254,6 +259,15 @@ class AudioDecoder(QThread):
     def set_pending_bytes(self, count: int) -> None:
         """Thread-safe: update the engine's pending byte count for back-pressure."""
         self._engine_pending_bytes = count
+
+    def set_paused(self, paused: bool) -> None:
+        """Thread-safe: pause/resume the decode loop.
+
+        Unlike the sink's ``suspend()``, this actually halts PCM production so
+        the engine can pause without the decoder flooding it with data.
+        """
+        with QMutexLocker(self._mutex):
+            self._paused = paused
 
     # ------------------------------------------------------------------
     # QThread run()
@@ -321,7 +335,7 @@ class AudioDecoder(QThread):
 
             # --- decode loop ---
             for packet in container.demux(audio_stream):
-                if self._should_stop():
+                if self._wait_while_paused():
                     break
 
                 # A corrupt packet (e.g. trailing garbage after a truncated
@@ -405,6 +419,22 @@ class AudioDecoder(QThread):
     def _should_stop(self) -> bool:
         with QMutexLocker(self._mutex):
             return self._stop_requested
+
+    def _wait_while_paused(self) -> bool:
+        """Block the decode loop while paused.
+
+        Returns ``True`` when a stop was requested (caller must break),
+        ``False`` when decoding should continue.
+        """
+        while True:
+            with QMutexLocker(self._mutex):
+                stop = self._stop_requested
+                paused = self._paused
+            if stop:
+                return True
+            if not paused:
+                return False
+            self.msleep(30)
 
 
 # ===================================================================
@@ -516,6 +546,11 @@ class AudioEngine(QObject):
         """Pause playback.  Call :meth:`resume` to continue."""
         if self._state != PlayState.PLAYING:
             return
+        # Stop the decoder from producing more PCM first, then suspend the
+        # sink.  suspend() alone keeps playing until its buffer drains, so
+        # without pausing the decoder that buffer would never empty.
+        if self._decoder is not None:
+            self._decoder.set_paused(True)
         if self._sink is not None:
             self._sink.suspend()
         self._set_state(PlayState.PAUSED)
@@ -528,6 +563,8 @@ class AudioEngine(QObject):
         """
         if self._state != PlayState.PAUSED:
             return
+        if self._decoder is not None:
+            self._decoder.set_paused(False)
         if self._sink is not None:
             self._sink.resume()
         self._set_state(PlayState.PLAYING)
@@ -629,6 +666,8 @@ class AudioEngine(QObject):
         # --- 7. Restore pause state ---
         if was_paused and self._sink is not None:
             self._sink.suspend()
+        if was_paused and self._decoder is not None:
+            self._decoder.set_paused(True)
 
     def set_volume(self, volume: float) -> None:
         """Set output volume (0.0 … 1.0)."""
@@ -697,6 +736,11 @@ class AudioEngine(QObject):
 
     def _flush_pending(self) -> None:
         """Write as much pending PCM data as possible to the audio sink."""
+        # Do not feed the sink while paused/stopped: a suspended sink keeps
+        # playing whatever is written to it, so writing here would defeat
+        # pause().
+        if self._state != PlayState.PLAYING:
+            return
         if not self._pending_buffer or self._sink_device is None:
             return
 
