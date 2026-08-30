@@ -197,12 +197,10 @@ class _SearchWorker(_Worker):
     def run_task(self) -> None:
         params = {"input": self._keyword, "filter": "name",
                     "type": self._source, "page": self._page}
-        body = urlencode(params).encode()
         referer = f"{BASE_URL}?name={quote(self._keyword, safe='')}&type={self._source}"
         resp = HTTP.request("POST", BASE_URL,
-            headers=_headers({"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
-                                "Referer": referer}),
-            body=body)
+            headers=_headers({"Content-Type": "application/x-www-form-urlencoded; charset=UTF-8", "Referer": referer}),
+            body=urlencode(params))
         if resp.status != 200:
             self.error.emit("server", str(resp.status)); return
         payload = resp.json()
@@ -231,7 +229,7 @@ class _DownloadWorker(_Worker):
             if resp.status != 200:
                 self.error.emit("server", f"HTTP {resp.status}")
                 return
-            chunks = resp.stream(65536, decode_content=True)
+            chunks = resp.stream(32768, decode_content=True)
             first_chunk = next(chunks, b"")
             file_format = _select_audio_format(
                 resp.headers,

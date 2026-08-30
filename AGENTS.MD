@@ -13,33 +13,7 @@
 - 所有第三方库通过 Python 包或系统包管理器提供，避免硬编码路径。
 
 ## 开发环境
-使用已有Conda环境`smallplayer`，已安装以下依赖
-```plaintext
-Package            Version
------------------- ---------
-anyio              4.14.0
-av                 17.1.0
-certifi            2026.6.17
-h11                0.16.0
-h2                 4.3.0
-hpack              4.1.0
-httpcore           1.0.9
-hyperframe         6.1.0
-idna               3.18
-mutagen            1.47.0
-packaging          26.2
-pip                26.1.2
-pyee               13.0.1
-PySide6            6.11.1
-PySide6_Addons     6.11.1
-PySide6_Essentials 6.11.1
-python-ffmpeg      2.0.12
-setuptools         82.0.1
-shiboken6          6.11.1
-typing_extensions  4.15.0
-urllib3            2.7.0
-wheel              0.47.0
-```
+使用已有Conda环境`smallplayer`，已安装Pyside6/urllib3/pyav/mutagen等
 
 除非绝对必要，否则不要引入其他依赖
 
