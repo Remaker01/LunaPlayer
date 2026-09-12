@@ -13,7 +13,7 @@ from app.core.favorites_manager import FavoritesManager
 from app.core.music_scanner import MusicScanner
 from app.core.playlist_manager import PlaylistManager
 from app.models.song import Song
-from app.ui.main_window import MainWindow, PageId
+from app.ui.main_window import MainWindow
 from tests.test_base import create_test_wav, ensure_qapp
 
 
@@ -82,7 +82,7 @@ class TestMainWindowRestore(unittest.TestCase):
             self.assertEqual(self.window._time_total.text(), "0:00")
             self.assertIs(
                 self.window._page_stack.currentWidget(),
-                self.window._page_widgets[PageId.QUEUE],
+                self.window._page_widgets["queue"],
             )
 
     def test_song_info_area_is_bounded_to_protect_progress_slider(self) -> None:
@@ -109,15 +109,15 @@ class TestMainWindowRestore(unittest.TestCase):
         self.assertIn("…", self.window._song_info_label.text())
 
     def test_open_favorites_switches_to_workspace_page(self) -> None:
-        self.window.navigate_to(PageId.QUEUE)
+        self.window.navigate_to("queue")
 
         self.window._on_open_favorites()
 
         self.assertIs(
             self.window._page_stack.currentWidget(),
-            self.window._page_widgets[PageId.FAVORITES],
+            self.window._page_widgets["favorites"],
         )
-        self.assertTrue(self.window._page_buttons[PageId.FAVORITES].isChecked())
+        self.assertTrue(self.window._page_buttons["favorites"].isChecked())
 
     def test_about_dialog_title_uses_lunaplayer_name(self) -> None:
         self.assertEqual(APP_NAME, "LunaPlayer")

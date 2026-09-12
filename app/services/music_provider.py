@@ -66,7 +66,8 @@ def _build_song(item: dict) -> Song | None:
     # download time (_select_audio_format) or at play time (audio engine).
     return Song(title=title, artist=(item.get("artist") or "").strip() or "未知艺术家",
                 file_path=_abs(item.get("url", "")), file_format="",
-                duration=float(item.get("duration") or 0))
+                duration=float(item.get("duration") or 0),
+                lrc_url=_abs(item.get("lrc", "")))
 
 
 def _sanitise(name: str) -> str:
@@ -250,17 +251,28 @@ class _DownloadWorker(_Worker):
 
 
 class _LyricsWorker(_Worker):
-    task_done = Signal(str)   # LRC text
-    def __init__(self, lrc_url: str, parent: QObject | None = None) -> None:
+    task_done = Signal(str)   # saved .lrc path when saving; otherwise LRC text
+    def __init__(self, lrc_url: str, save_path: str | None = None,
+                 parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._lrc_url = lrc_url
+        self._save_path = save_path
 
     def run_task(self) -> None:
         resp = HTTP.request("GET", self._lrc_url,
             headers=_headers({"Referer": BASE_URL, "Accept": "*/*"})
         )
         if resp.status == 200:
-            self.task_done.emit(resp.data.decode("utf-8", errors="replace"))
+            text = resp.data.decode("utf-8", errors="replace")
+            if self._save_path:
+                # Persist the LRC next to the audio download (same base name)
+                # so the lyrics window can find it at play time.
+                path = Path(self._save_path)
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text(text, encoding="utf-8")
+                self.task_done.emit(str(path))
+            else:
+                self.task_done.emit(text)
         else:
             self.error.emit("server", f"HTTP {resp.status}")
 
@@ -304,7 +316,23 @@ class MusicProvider(QObject):
         self._run(w)
 
     def fetch_lyrics(self, lrc_url: str) -> None:
-        w = _LyricsWorker(lrc_url, self)
+        w = _LyricsWorker(lrc_url, parent=self)
+        w.task_done.connect(self.lyrics_ready.emit)
+        w.error.connect(lambda cat, msg: self.lyrics_error.emit(cat, msg))
+        self._run(w)
+
+    def download_lyrics(self, song: Song, save_dir: str) -> None:
+        """Download the lyrics for *song* and save them as a ``.lrc`` file.
+
+        The file uses the same base name as the audio download
+        (``<artist> - <title>.lrc``) so the lyrics window can find it via
+        ``Path(song.file_path).with_suffix(".lrc")`` at play time.
+        """
+        if not song.lrc_url:
+            return
+        safe_name = _sanitise(f"{song.artist} - {song.title}") or song.title
+        save_path = str(Path(save_dir) / f"{safe_name}.lrc")
+        w = _LyricsWorker(song.lrc_url, save_path, self)
         w.task_done.connect(self.lyrics_ready.emit)
         w.error.connect(lambda cat, msg: self.lyrics_error.emit(cat, msg))
         self._run(w)

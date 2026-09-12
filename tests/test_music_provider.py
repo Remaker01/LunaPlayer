@@ -97,6 +97,27 @@ class TestMusicProviderFormatDetection(unittest.TestCase):
         self.assertIsNotNone(song)
         self.assertEqual(song.file_format, "")
 
+    def test_build_song_captures_absolute_lrc_url(self) -> None:
+        """The relative 'lrc' field is stored as an absolute URL for later download."""
+        song = _build_song({
+            "name": "Example",
+            "artist": "Artist",
+            "url": "api.php?get=url&id=1",
+            "lrc": "api.php?get=lrc&id=1",
+        })
+        self.assertIsNotNone(song)
+        self.assertEqual(song.lrc_url, "https://music.90svip.cn/api.php?get=lrc&id=1")
+
+    def test_build_song_lrc_url_stays_empty_when_missing(self) -> None:
+        """Songs without a lyrics field must default to an empty lrc_url."""
+        song = _build_song({
+            "name": "Example",
+            "artist": "Artist",
+            "url": "api.php?get=url&id=1",
+        })
+        self.assertIsNotNone(song)
+        self.assertEqual(song.lrc_url, "")
+
     def test_magic_bytes_beat_content_disposition(self) -> None:
         """Magic bytes detection must take priority over Content-Disposition."""
         fmt = _select_audio_format(

@@ -42,6 +42,7 @@ import app.services.config as cfg
 # ---------------------------------------------------------------------------
 
 KEY_DOWNLOAD_DIR = "download_dir"
+KEY_DOWNLOAD_LYRICS = "download_lyrics"
 KEY_LYRICS_FONT_SIZE = "lyrics_font_size"
 KEY_LYRICS_OPACITY = "lyrics_opacity"
 KEY_LYRICS_TEXT_COLOR = "lyrics_text_color"
@@ -50,6 +51,7 @@ KEY_VOLUME = "volume"
 KEY_CLOSE_TO_TRAY = "close_to_tray"
 
 _DEFAULT_DOWNLOAD_DIR = str(default_download_dir())
+_DEFAULT_DOWNLOAD_LYRICS = True
 _DEFAULT_FONT_SIZE = 22
 _DEFAULT_LYRICS_OPACITY = 40
 _DEFAULT_LYRICS_TEXT_COLOR = "#EFF3FF"
@@ -66,6 +68,7 @@ class Settings:
     def __init__(
         self,
         download_dir: str = _DEFAULT_DOWNLOAD_DIR,
+        download_lyrics: bool = _DEFAULT_DOWNLOAD_LYRICS,
         lyrics_font_size: int = _DEFAULT_FONT_SIZE,
         lyrics_opacity: int = _DEFAULT_LYRICS_OPACITY,
         lyrics_text_color: str = _DEFAULT_LYRICS_TEXT_COLOR,
@@ -74,6 +77,7 @@ class Settings:
         close_to_tray: bool = True,
     ) -> None:
         self.download_dir = download_dir
+        self.download_lyrics = download_lyrics
         self.lyrics_font_size = lyrics_font_size
         self.lyrics_opacity = lyrics_opacity
         self.lyrics_text_color = lyrics_text_color
@@ -86,6 +90,7 @@ class Settings:
         """Load current settings from the config file."""
         return cls(
             download_dir=cfg.get(KEY_DOWNLOAD_DIR, _DEFAULT_DOWNLOAD_DIR),
+            download_lyrics=cfg.get(KEY_DOWNLOAD_LYRICS, _DEFAULT_DOWNLOAD_LYRICS),
             lyrics_font_size=cfg.get(KEY_LYRICS_FONT_SIZE, _DEFAULT_FONT_SIZE),
             lyrics_opacity=cfg.get(KEY_LYRICS_OPACITY, _DEFAULT_LYRICS_OPACITY),
             lyrics_text_color=cfg.get(KEY_LYRICS_TEXT_COLOR, _DEFAULT_LYRICS_TEXT_COLOR),
@@ -97,6 +102,7 @@ class Settings:
     def save(self) -> None:
         """Persist all settings to the config file."""
         cfg.set(KEY_DOWNLOAD_DIR, self.download_dir)
+        cfg.set(KEY_DOWNLOAD_LYRICS, self.download_lyrics)
         cfg.set(KEY_LYRICS_FONT_SIZE, self.lyrics_font_size)
         cfg.set(KEY_LYRICS_OPACITY, self.lyrics_opacity)
         cfg.set(KEY_LYRICS_TEXT_COLOR, self.lyrics_text_color)
@@ -219,7 +225,7 @@ class SettingsDialog(QDialog):
         self._add_section("播放", "默认播放方式和音量", page)
 
     def _build_download_page(self, current: Settings) -> None:
-        """Build the download location section."""
+        """Build the download location and lyrics options section."""
         page, layout = self._create_section_page(
             "下载",
             "管理在线歌曲的默认保存目录，便于未来扩展下载队列和文件管理能力。",
@@ -237,8 +243,16 @@ class SettingsDialog(QDialog):
         dl_layout.addWidget(dl_browse)
 
         layout.addWidget(dl_group)
+
+        lrc_group = QGroupBox("下载选项")
+        lrc_layout = QVBoxLayout(lrc_group)
+        self._dl_lyrics_cb = QCheckBox("下载歌曲时同时下载歌词 (.lrc)")
+        self._dl_lyrics_cb.setChecked(current.download_lyrics)
+        lrc_layout.addWidget(self._dl_lyrics_cb)
+        layout.addWidget(lrc_group)
+
         layout.addStretch(1)
-        self._add_section("下载", "歌曲下载位置", page)
+        self._add_section("下载", "歌曲下载位置与歌词", page)
 
     def _build_interface_page(self, current: Settings) -> None:
         """Build the interface-related section."""
@@ -344,6 +358,7 @@ class SettingsDialog(QDialog):
         """Collect all values, persist, and close."""
         self._result = Settings(
             download_dir=self._dl_path.text(),
+            download_lyrics=self._dl_lyrics_cb.isChecked(),
             lyrics_font_size=self._font_size_spin.value(),
             lyrics_opacity=self._opacity_slider.value(),
             lyrics_text_color=self._lyrics_color_hex,

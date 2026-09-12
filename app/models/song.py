@@ -30,10 +30,11 @@ class Song:
     duration: float = 0.0  # Duration in seconds.
     file_path: str = ""
     file_format: str = ""
+    lrc_url: str = ""  # Online lyrics URL (empty for local songs).
 
     def __post_init__(self) -> None:
         """Normalise string fields to avoid accidental None."""
-        for field_name in ("title", "artist", "album", "file_path", "file_format"):
+        for field_name in ("title", "artist", "album", "file_path", "file_format", "lrc_url"):
             value = getattr(self, field_name)
             if value is None:
                 object.__setattr__(self, field_name, "")

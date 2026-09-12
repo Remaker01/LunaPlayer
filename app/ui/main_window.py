@@ -23,7 +23,6 @@ methods directly except to wire up initial connections.
 
 from __future__ import annotations
 
-import enum
 import logging
 from pathlib import Path
 from typing import Optional
@@ -68,14 +67,6 @@ from app.services.music_provider import MusicProvider
 import app.services.config as cfg
 
 logger = logging.getLogger(__name__)
-
-
-class PageId(enum.Enum):
-    """Logical top-level pages exposed by the main workspace shell."""
-
-    QUEUE = "queue"
-    SEARCH = "search"
-    FAVORITES = "favorites"
 
 
 class _InspectorPanel(QWidget):
@@ -276,8 +267,8 @@ class MainWindow(QMainWindow):
         self._last_position_ms: int = 0
         self._restore_selection_only: bool = False
         self._song_info_full_text: str = "未播放"
-        self._page_widgets: dict[PageId, QWidget] = {}
-        self._page_buttons: dict[PageId, QPushButton] = {}
+        self._page_widgets: dict[str, QWidget] = {}
+        self._page_buttons: dict[str, QPushButton] = {}
         self._queue_selected_index: int = -1
         self._favorites_selected_index: int = -1
         self._search_selected_song: Optional[Song] = None
@@ -414,17 +405,17 @@ class MainWindow(QMainWindow):
 
         queue_view_action = QAction("当前队列(&Q)", self)
         queue_view_action.setShortcut(QKeySequence("Ctrl+1"))
-        queue_view_action.triggered.connect(lambda: self.navigate_to(PageId.QUEUE))
+        queue_view_action.triggered.connect(lambda: self.navigate_to("queue"))
         view_menu.addAction(queue_view_action)
 
         search_view_action = QAction("在线搜索(&S)", self)
         search_view_action.setShortcut(QKeySequence("Ctrl+2"))
-        search_view_action.triggered.connect(lambda: self.navigate_to(PageId.SEARCH))
+        search_view_action.triggered.connect(lambda: self.navigate_to("search"))
         view_menu.addAction(search_view_action)
 
         favorites_view_action = QAction("收藏(&F)", self)
         favorites_view_action.setShortcut(QKeySequence("Ctrl+3"))
-        favorites_view_action.triggered.connect(lambda: self.navigate_to(PageId.FAVORITES))
+        favorites_view_action.triggered.connect(lambda: self.navigate_to("favorites"))
         view_menu.addAction(favorites_view_action)
 
         view_menu.addSeparator()
@@ -465,12 +456,12 @@ class MainWindow(QMainWindow):
 
         search_btn = QPushButton("在线搜索")
         search_btn.setObjectName("toolbarSecondaryButton")
-        search_btn.clicked.connect(lambda: self.navigate_to(PageId.SEARCH))
+        search_btn.clicked.connect(lambda: self.navigate_to("search"))
         toolbar.addWidget(search_btn)
 
         favorites_btn = QPushButton("收藏")
         favorites_btn.setObjectName("toolbarSecondaryButton")
-        favorites_btn.clicked.connect(lambda: self.navigate_to(PageId.FAVORITES))
+        favorites_btn.clicked.connect(lambda: self.navigate_to("favorites"))
         toolbar.addWidget(favorites_btn)
 
         toolbar.addSeparator()
@@ -518,9 +509,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(app_label)
 
         button_specs = [
-            (PageId.QUEUE, "Ctrl+1", "当前队列"),
-            (PageId.SEARCH, "Ctrl+2", "在线搜索"),
-            (PageId.FAVORITES, "Ctrl+3", "收藏"),
+            ("queue", "Ctrl+1", "当前队列"),
+            ("search", "Ctrl+2", "在线搜索"),
+            ("favorites", "Ctrl+3", "收藏"),
         ]
         for page_id, shortcut_text, label in button_specs:
             button = QPushButton(label)
@@ -539,9 +530,9 @@ class MainWindow(QMainWindow):
         self._create_queue_page()
         self._create_search_page()
         self._create_favorites_page()
-        self.navigate_to(PageId.QUEUE)
+        self.navigate_to("queue")
 
-    def _register_page(self, page_id: PageId, widget: QWidget) -> None:
+    def _register_page(self, page_id: str, widget: QWidget) -> None:
         """Register a page widget in the page stack."""
         self._page_widgets[page_id] = widget
         self._page_stack.addWidget(widget)
@@ -632,7 +623,7 @@ class MainWindow(QMainWindow):
 
         splitter.setSizes([760, 320])
         layout.addWidget(splitter, 1)
-        self._register_page(PageId.QUEUE, page)
+        self._register_page("queue", page)
 
     def _create_search_page(self) -> None:
         """Create the online search workspace page."""
@@ -665,7 +656,7 @@ class MainWindow(QMainWindow):
 
         splitter.setSizes([760, 320])
         layout.addWidget(splitter, 1)
-        self._register_page(PageId.SEARCH, page)
+        self._register_page("search", page)
 
     def _create_favorites_page(self) -> None:
         """Create the favorites management page."""
@@ -701,9 +692,9 @@ class MainWindow(QMainWindow):
 
         splitter.setSizes([760, 320])
         layout.addWidget(splitter, 1)
-        self._register_page(PageId.FAVORITES, page)
+        self._register_page("favorites", page)
 
-    def navigate_to(self, page_id: PageId) -> None:
+    def navigate_to(self, page_id: str) -> None:
         """Switch the stacked workspace to the requested page."""
         target = self._page_widgets.get(page_id)
         if target is None:
@@ -932,6 +923,8 @@ class MainWindow(QMainWindow):
         self._search_provider.search_error.connect(self._on_search_error)
         self._search_provider.download_ready.connect(self._on_download_ready)
         self._search_provider.download_error.connect(self._on_download_error)
+        self._search_provider.lyrics_ready.connect(self._on_lyrics_ready)
+        self._search_provider.lyrics_error.connect(self._on_lyrics_error)
 
     # ================================================================
     # Slots – Playlist
@@ -1153,7 +1146,7 @@ class MainWindow(QMainWindow):
             self._audio_engine.stop()
         new_index = self._playlist_manager.add_song(song)
         self._playlist_manager.go_to(new_index)
-        self.navigate_to(PageId.QUEUE)
+        self.navigate_to("queue")
 
     @Slot(int)
     def _on_favorites_window_remove_requested(self, index: int) -> None:
@@ -1407,7 +1400,7 @@ class MainWindow(QMainWindow):
     @Slot()
     def _on_open_favorites(self) -> None:
         """Switch to the favorites page inside the main workspace."""
-        self.navigate_to(PageId.FAVORITES)
+        self.navigate_to("favorites")
 
     # -----------------------------------------------------------------
     # Helpers
@@ -1538,9 +1531,17 @@ class MainWindow(QMainWindow):
 
     @Slot(object)
     def _on_search_download(self, song: Song) -> None:
-        """Download a search result song (async, multiple run in parallel)."""
+        """Download a search result song (async, multiple run in parallel).
+
+        When enabled in settings and the result exposes a lyrics URL, the
+        matching ``.lrc`` file is fetched in parallel so desktop lyrics work
+        as soon as the downloaded song is played.
+        """
         self._active_downloads += 1
         self._search_provider.download(song, self._download_dir)
+        if self._download_lyrics and song.lrc_url:
+            self._active_downloads += 1
+            self._search_provider.download_lyrics(song, self._download_dir)
         self._status_label.setText(
             f"正在下载 ({self._active_downloads} 个活跃): {song.title}…")
 
@@ -1571,6 +1572,24 @@ class MainWindow(QMainWindow):
         self._active_downloads = max(0, self._active_downloads - 1)
         self._status_label.setText(
             f"⚠ 下载失败 {song.title}: {message}"
+            + (f"  (剩余 {self._active_downloads} 个)" if self._active_downloads else ""))
+
+    @Slot(str)
+    def _on_lyrics_ready(self, lrc_path: str) -> None:
+        """A lyrics download finished – confirm via the status bar."""
+        self._active_downloads = max(0, self._active_downloads - 1)
+        name = Path(lrc_path).name
+        self._status_label.setText(
+            f"歌词已下载: {name}"
+            + (f"  (剩余 {self._active_downloads} 个)" if self._active_downloads else ""))
+
+    @Slot(str, str)
+    def _on_lyrics_error(self, category: str, message: str) -> None:
+        """Display a lyrics fetch error without failing the song download."""
+        del category
+        self._active_downloads = max(0, self._active_downloads - 1)
+        self._status_label.setText(
+            f"⚠ 歌词下载失败: {message}"
             + (f"  (剩余 {self._active_downloads} 个)" if self._active_downloads else ""))
 
     @Slot()
@@ -1614,6 +1633,7 @@ class MainWindow(QMainWindow):
                 return
             self._download_dir = new_settings.download_dir
             self._search_panel.set_download_dir(self._download_dir)
+            self._download_lyrics = new_settings.download_lyrics
             self._lyrics_window.set_lyrics_font_size(new_settings.lyrics_font_size)
             self._lyrics_window.set_lyrics_opacity(new_settings.lyrics_opacity)
             self._lyrics_window.set_lyrics_text_color(QColor(new_settings.lyrics_text_color))
@@ -1630,6 +1650,7 @@ class MainWindow(QMainWindow):
     def _apply_saved_settings(self) -> None:
         """Load persisted settings and apply them to the UI."""
         saved = Settings.load()
+        self._download_lyrics = saved.download_lyrics
         self._lyrics_window.set_lyrics_font_size(saved.lyrics_font_size)
         self._lyrics_window.set_lyrics_opacity(saved.lyrics_opacity)
         self._lyrics_window.set_lyrics_text_color(QColor(saved.lyrics_text_color))
@@ -1905,9 +1926,9 @@ class MainWindow(QMainWindow):
         sc.activated.connect(self._on_play_pause)
 
         for sequence, page_id in (
-            ("Ctrl+1", PageId.QUEUE),
-            ("Ctrl+2", PageId.SEARCH),
-            ("Ctrl+3", PageId.FAVORITES),
+            ("Ctrl+1", "queue"),
+            ("Ctrl+2", "search"),
+            ("Ctrl+3", "favorites"),
         ):
             shortcut = QShortcut(QKeySequence(sequence), self)
             shortcut.setContext(Qt.ApplicationShortcut)
