@@ -1,6 +1,6 @@
 ﻿[CmdletBinding()]
 param(
-    [string]$CondaEnv = "smallplayer",
+    [string]$Python = "python",
     [string]$OutputDir = "dist\nuitka-fixed",
     [string]$CacheDir = ".nuitka-cache",
     [switch]$KeepBuildDir
@@ -15,8 +15,19 @@ Set-Location -LiteralPath $projectRoot
 $resolvedOutputDir = Join-Path $projectRoot $OutputDir
 $resolvedCacheDir = Join-Path $projectRoot $CacheDir
 
-if (-not (Get-Command conda -ErrorAction SilentlyContinue)) {
-    throw "Conda is not available in PATH."
+if (-not (Get-Command $Python -ErrorAction SilentlyContinue)) {
+    throw "Python interpreter '$Python' was not found in PATH. Activate the environment that has the dependencies, or pass -Python <path to python.exe>."
+}
+
+# The build only needs the packages installed in the chosen interpreter,
+# so verify them here instead of requiring a specific environment manager.
+$savedErrorPreference = $ErrorActionPreference
+$ErrorActionPreference = "Continue"
+& $Python -c "import nuitka, PySide6, av" 2>$null
+$importExitCode = $LASTEXITCODE
+$ErrorActionPreference = $savedErrorPreference
+if ($importExitCode -ne 0) {
+    throw "The interpreter '$Python' cannot import nuitka, PySide6 and av. Install the dependencies from requirements.txt into it first, or pass -Python <path to python.exe>."
 }
 
 if (-not (Test-Path -LiteralPath (Join-Path $projectRoot "main.py"))) {
@@ -36,8 +47,7 @@ if (Test-Path -LiteralPath $resolvedOutputDir) {
 }
 
 $arguments = @(
-    "run", "-n", $CondaEnv,
-    "python", "-m", "nuitka",
+    "-m", "nuitka",
     "--standalone",
     "--enable-plugin=pyside6",
     "--include-module=av.utils",
@@ -65,11 +75,11 @@ $env:NUITKA_CACHE_DIR = $resolvedCacheDir
 
 try {
     Write-Host "Building LunaPlayer with Nuitka..."
-    Write-Host "  Conda env : $CondaEnv"
+    Write-Host "  Python    : $(& $Python -c 'import sys; print(sys.executable)')"
     Write-Host "  Output dir: $resolvedOutputDir"
     Write-Host "  Cache dir : $resolvedCacheDir"
 
-    & conda @arguments
+    & $Python @arguments
     if ($LASTEXITCODE -ne 0) {
         throw "Nuitka build failed with exit code $LASTEXITCODE."
     }

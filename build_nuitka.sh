@@ -2,15 +2,15 @@
 
 set -eu
 
-CONDA_ENV="smallplayer"
+PYTHON_BIN="${PYTHON:-}"
 OUTPUT_DIR="dist/nuitka-fixed"
 CACHE_DIR=".nuitka-cache"
 KEEP_BUILD_DIR=0
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --conda-env)
-            CONDA_ENV="$2"
+        --python)
+            PYTHON_BIN="$2"
             shift 2
             ;;
         --output-dir)
@@ -38,8 +38,28 @@ cd "$PROJECT_ROOT"
 RESOLVED_OUTPUT_DIR="$PROJECT_ROOT/$OUTPUT_DIR"
 RESOLVED_CACHE_DIR="$PROJECT_ROOT/$CACHE_DIR"
 
-if ! command -v conda >/dev/null 2>&1; then
-    echo "Conda is not available in PATH." >&2
+if [ -z "$PYTHON_BIN" ]; then
+    # Prefer whichever interpreter name exists, since "python" alone is not
+    # guaranteed on every platform.
+    for candidate in python python3; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            PYTHON_BIN="$candidate"
+            break
+        fi
+    done
+fi
+
+if [ -z "$PYTHON_BIN" ] || ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+    echo "Python interpreter '${PYTHON_BIN:-python}' was not found in PATH." >&2
+    echo "Activate the environment that has the dependencies, or pass --python <path>." >&2
+    exit 1
+fi
+
+# The build only needs the packages installed in the chosen interpreter,
+# so verify them here instead of requiring a specific environment manager.
+if ! "$PYTHON_BIN" -c "import nuitka, PySide6, av" >/dev/null 2>&1; then
+    echo "The interpreter '$PYTHON_BIN' cannot import nuitka, PySide6 and av." >&2
+    echo "Install the dependencies from requirements.txt into it first, or pass --python <path>." >&2
     exit 1
 fi
 
@@ -83,8 +103,6 @@ case "$UNAME_S" in
 esac
 
 set -- \
-    run -n "$CONDA_ENV" \
-    python -m nuitka \
     --standalone \
     --enable-plugin=pyside6 \
     --include-module=av.utils \
@@ -111,11 +129,11 @@ fi
 set -- "$@" main.py
 
 echo "Building LunaPlayer with Nuitka..."
-echo "  Conda env : $CONDA_ENV"
+echo "  Python    : $("$PYTHON_BIN" -c 'import sys; print(sys.executable)')"
 echo "  Output dir: $RESOLVED_OUTPUT_DIR"
 echo "  Cache dir : $RESOLVED_CACHE_DIR"
 
-NUITKA_CACHE_DIR="$RESOLVED_CACHE_DIR" conda "$@"
+NUITKA_CACHE_DIR="$RESOLVED_CACHE_DIR" "$PYTHON_BIN" -m nuitka "$@"
 
 DIST_DIR="$RESOLVED_OUTPUT_DIR/main.dist"
 if [ ! -d "$DIST_DIR" ]; then
