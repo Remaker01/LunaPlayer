@@ -36,3 +36,4 @@ logs/
 temp/
 result.csv
 .nuitka-cache
+PITFALLS.md

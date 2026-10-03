@@ -2,8 +2,6 @@
 
 BASE URL: https://music.90svip.cn/
 
-*为保持搜索功能的相对独立性，推荐使用已安装的`httpcore`，`urllib3`进行搜索/下载*
-
 ## 数据格式
 ### 列表
 请求方法：POST+XHR
