@@ -177,7 +177,7 @@ class SettingsDialog(QDialog):
         self._section_list.addItem(item)
         self._section_stack.addWidget(page)
 
-    def _create_section_page(self, title: str, subtitle: str) -> tuple[QWidget, QVBoxLayout]:
+    def _create_section_page(self, title: str, subtitle: str="") -> tuple[QWidget, QVBoxLayout]:
         """Create a section page with a consistent title block."""
         page = QWidget()
         layout = QVBoxLayout(page)
@@ -188,21 +188,21 @@ class SettingsDialog(QDialog):
         title_label.setObjectName("settingsSectionTitle")
         layout.addWidget(title_label)
 
-        subtitle_label = QLabel(subtitle)
-        subtitle_label.setObjectName("settingsSectionSubtitle")
-        subtitle_label.setWordWrap(True)
-        layout.addWidget(subtitle_label)
+        # subtitle_label = QLabel(subtitle)
+        # subtitle_label.setObjectName("settingsSectionSubtitle")
+        # subtitle_label.setWordWrap(True)
+        # layout.addWidget(subtitle_label)
 
         return page, layout
 
     def _build_playback_page(self, current: Settings) -> None:
         """Build the playback defaults section."""
         page, layout = self._create_section_page(
-            "播放",
-            "设置默认播放方式与启动时音量，适合作为播放器的全局默认行为。",
+            "播放"
+            # "设置默认播放行为，将覆盖现有设置。",
         )
 
-        play_group = QGroupBox("播放默认值")
+        play_group = QGroupBox("播放默认值（将覆盖现有设置）")
         play_form = QFormLayout(play_group)
 
         self._play_mode_combo = QComboBox()
@@ -227,8 +227,8 @@ class SettingsDialog(QDialog):
     def _build_download_page(self, current: Settings) -> None:
         """Build the download location and lyrics options section."""
         page, layout = self._create_section_page(
-            "下载",
-            "管理在线歌曲的默认保存目录，便于未来扩展下载队列和文件管理能力。",
+            "下载"
+            # "管理在线歌曲的默认保存目录，便于未来扩展下载队列和文件管理能力。",
         )
 
         dl_group = QGroupBox("下载目录")
@@ -257,8 +257,8 @@ class SettingsDialog(QDialog):
     def _build_interface_page(self, current: Settings) -> None:
         """Build the interface-related section."""
         page, layout = self._create_section_page(
-            "界面",
-            "控制界面观感相关的选项。当前保留桌面歌词字体设置，后续可扩展主题与密度配置。",
+            "界面"
+            # "控制界面观感相关的选项。当前保留桌面歌词字体设置，后续可扩展主题与密度配置。",
         )
 
         lrc_group = QGroupBox("桌面歌词")
@@ -325,8 +325,8 @@ class SettingsDialog(QDialog):
     def _build_behavior_page(self, current: Settings) -> None:
         """Build the behavior section."""
         page, layout = self._create_section_page(
-            "行为",
-            "控制窗口和托盘的交互方式。",
+            "行为"
+            # "控制窗口和托盘的交互方式。",
         )
 
         beh_group = QGroupBox("应用行为")

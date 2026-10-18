@@ -26,5 +26,4 @@ def set(key: str, value: Any) -> None:
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         data = {}
     data[key] = value
-    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
